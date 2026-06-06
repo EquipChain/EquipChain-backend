@@ -4,10 +4,10 @@ const port = 3000;
 
 app.get('/', (req, res) => {
   res.json({ 
-    project: 'Utility Drip', 
+    project: 'Equipchain', 
     status: 'Monitoring Meters', 
     contract: 'CB7PSJZALNWNX7NLOAM6LOEL4OJZMFPQZJMIYO522ZSACYWXTZIDEDSS' 
   });
 });
 
-app.listen(port, () => console.log('Utility API running'));
+app.listen(port, () => console.log('Equipchain API running'));

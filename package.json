@@ -1,7 +1,7 @@
 {
-  "name": "utility-backend",
+  "name": "equipchain-backend",
   "version": "1.0.0",
-  "description": "API for Utility Drip",
+  "description": "API for Equipchain",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"

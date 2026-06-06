@@ -4,6 +4,7 @@
   "description": "Express API for Equipchain utility meter monitoring and data access",
   "main": "index.js",
   "scripts": {
+    "test": "node --test",
     "start": "node index.js"
   },
   "dependencies": {

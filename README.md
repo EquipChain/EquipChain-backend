@@ -266,6 +266,8 @@ All configuration is via environment variables. Create a `.env` file in the proj
 | `WS_PATH` | `/ws` | No | WebSocket endpoint path |
 | `NODE_ENV` | `development` | No | `development`, `test`, or `production` |
 | `LOG_LEVEL` | `info` | No | `debug`, `info`, `warn`, `error` |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | — | No | OTLP collector endpoint for trace export (e.g. `http://localhost:4318`) |
+| `OTEL_SERVICE_NAME` | `equipchain-api` | No | Service name reported in traces |
 | `JWT_SECRET` | — | Yes (in production) | Secret key for signing JWTs |
 | `JWT_EXPIRY` | `1h` | No | JWT expiration duration |
 | `RATE_LIMIT_WINDOW` | `900000` | No | Rate limit window in ms (default 15 min) |

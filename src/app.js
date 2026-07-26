@@ -1,20 +1,35 @@
 const crypto = require('crypto');
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
 const { trace } = require('@opentelemetry/api');
 const { childLogger } = require('./config/logger');
 const config = require('./config');
 const routes = require('./routes');
+const { sanitizeForLogging, sanitize } = require('./utils/sanitize');
 
 const app = express();
 const log = childLogger('http');
 
 // Security middleware
+app.use(helmet());
 app.use(cors());
 
-// Body parsing middleware
-app.use(express.json({ limit: '10mb' }));
-app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+// Ensure Content-Type is application/json for all API responses
+app.use((req, res, next) => {
+  const originalJson = res.json;
+  res.json = function (data) {
+    if (!res.headersSent) {
+      res.setHeader('Content-Type', 'application/json');
+    }
+    return originalJson.call(this, data);
+  };
+  next();
+});
+
+// Body parsing middleware with size limits
+app.use(express.json({ limit: config.maxBodySize }));
+app.use(express.urlencoded({ extended: true, limit: config.maxBodySize }));
 
 // Correlation ID and request logging middleware
 app.use((req, res, next) => {
@@ -35,7 +50,7 @@ app.use((req, res, next) => {
       {
         correlationId,
         method: req.method,
-        url: req.originalUrl,
+        url: sanitizeForLogging(req.originalUrl),
         status: res.statusCode,
         durationMs,
       },
@@ -62,7 +77,7 @@ app.get('/', (req, res) => {
 app.use((req, res) => {
   res.status(404).json({
     error: 'Not Found',
-    message: `Cannot ${req.method} ${req.originalUrl}`,
+    message: sanitize(`Cannot ${req.method} ${req.originalUrl}`),
   });
 });
 
@@ -71,7 +86,7 @@ app.use((err, req, res, next) => {
   log.error(
     {
       correlationId: req.correlationId,
-      error: err.message,
+      error: sanitizeForLogging(err.message),
       stack: err.stack,
     },
     'request error'
@@ -79,7 +94,7 @@ app.use((err, req, res, next) => {
 
   res.status(err.status || 500).json({
     error: err.name || 'Internal Server Error',
-    message: config.isProduction ? 'An error occurred' : err.message,
+    message: config.isProduction ? 'An error occurred' : sanitize(err.message),
   });
 });
 

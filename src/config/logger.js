@@ -5,6 +5,20 @@ const isTest = process.env.NODE_ENV === 'test';
 
 const logger = pino({
   level: process.env.LOG_LEVEL || 'info',
+  // Redact sensitive fields to prevent log injection and protect sensitive data
+  redact: {
+    paths: [
+      'password',
+      'token',
+      'apiKey',
+      'secret',
+      'authorization',
+      'cookie',
+      'req.headers.authorization',
+      'req.headers.cookie',
+    ],
+    remove: true,
+  },
   transport:
     isProduction || isTest
       ? undefined

@@ -6,6 +6,7 @@ const {
   CONTRACT_ID = 'CB7PSJZALNWNX7NLOAM6LOEL4OJZMFPQZJMIYO522ZSACYWXTZIDEDSS',
   LOG_LEVEL = 'info',
   OTEL_SERVICE_NAME = 'equipchain-api',
+  MAX_BODY_SIZE = '1mb',
 } = process.env;
 
 // Validate required environment variables for production
@@ -23,6 +24,7 @@ const config = Object.freeze({
   port: parseInt(PORT, 10),
   contractId: CONTRACT_ID,
   logLevel: LOG_LEVEL,
+  maxBodySize: MAX_BODY_SIZE,
   otel: {
     serviceName: OTEL_SERVICE_NAME,
   },

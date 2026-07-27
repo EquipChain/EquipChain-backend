@@ -1,5 +1,6 @@
 const express = require('express');
 const router = express.Router();
+const { services } = require('../services');
 
 // Import route modules here as they are created
 // const authRoutes = require('./auth');
@@ -13,7 +14,25 @@ const router = express.Router();
 
 // Health check route
 router.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  const healthData = {
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+  };
+
+  // Add queue stats if queue service is available
+  if (services.queue) {
+    healthData.queue = services.queue.getStats();
+  }
+
+  // Add scheduler stats if scheduler service is available
+  if (services.scheduler) {
+    healthData.scheduler = {
+      schedules: services.scheduler.getAllSchedules().length,
+      isRunning: services.scheduler.isRunning,
+    };
+  }
+
+  res.json(healthData);
 });
 
 module.exports = router;

@@ -155,8 +155,60 @@ All endpoints return JSON. Base URL: `http://localhost:3000` (development) or yo
 
 | Method | Path | Description | Auth |
 |--------|------|-------------|------|
-| `GET` | `/exports/meters` | Export meter data (CSV/JSON) | Yes |
-| `GET` | `/exports/readings` | Export readings report | Yes |
+| `GET` | `/api/exports/readings` | Export meter readings (CSV/JSON/NDJSON) | Yes |
+| `GET` | `/api/exports/analytics/:summaryType` | Export analytics summaries (daily/weekly/monthly) | Yes |
+| `GET` | `/api/exports/system-report` | Export system-wide report (meters, readings, alerts) | Admin |
+| `GET` | `/api/exports/meters` | Export meter registry | Yes |
+
+#### Export Query Parameters
+
+All export endpoints support the following query parameters:
+
+- `format` - Output format: `csv`, `json`, or `ndjson` (default: `csv`)
+- `fields` - Comma-separated list of fields to include (e.g., `id,timestamp,value`)
+- `startDate` - Filter by start date (ISO format: `2026-01-01` or `2026-01-01T00:00:00Z`)
+- `endDate` - Filter by end date (ISO format)
+- `pretty` - Set to `true` for pretty-printed JSON (default: `false`)
+
+Additional parameters specific to endpoints:
+
+- `/api/exports/readings`: `meterIds` (comma-separated), `status`
+- `/api/exports/analytics/:summaryType`: Date range filtering for daily summaries
+- `/api/exports/system-report`: `sections` (comma-separated: `meters,readings,alerts,summary`)
+- `/api/exports/meters`: `status`, `location`
+
+#### Export Examples
+
+```bash
+# Export all readings as CSV
+curl -H "Authorization: Bearer YOUR_TOKEN" \
+  "http://localhost:3000/api/exports/readings?format=csv"
+
+# Export specific fields as JSON
+curl -H "Authorization: Bearer YOUR_TOKEN" \
+  "http://localhost:3000/api/exports/readings?format=json&fields=id,timestamp,value"
+
+# Export readings for specific meters and date range
+curl -H "Authorization: Bearer YOUR_TOKEN" \
+  "http://localhost:3000/api/exports/readings?format=csv&meterIds=meter-001,meter-002&startDate=2026-01-01&endDate=2026-06-01"
+
+# Export daily analytics as NDJSON (streaming)
+curl -H "Authorization: Bearer YOUR_TOKEN" \
+  "http://localhost:3000/api/exports/analytics/daily?format=ndjson"
+
+# Export system report (admin only)
+curl -H "Authorization: Bearer YOUR_TOKEN" \
+  -H "x-role: admin" \
+  "http://localhost:3000/api/exports/system-report?format=json&sections=meters,summary"
+```
+
+#### Streaming Support
+
+All export endpoints use streaming to handle large datasets efficiently:
+- Responses use `Transfer-Encoding: chunked`
+- Data is streamed row-by-row for CSV and line-by-line for NDJSON
+- Memory usage remains constant regardless of dataset size
+- Suitable for exporting 10,000+ records
 
 ### Webhooks
 

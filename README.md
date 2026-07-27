@@ -252,12 +252,23 @@ EquipChain-backend/
 ├── .github/
 │   └── workflows/
 │       └── ci.yml              # CI pipeline (test on push/PR to main)
+├── src/
+│   ├── config/
+│   │   ├── logger.js           # Pino structured logger
+│   │   └── tracing.js          # OpenTelemetry setup
+│   ├── schemas/
+│   │   └── common.schema.js    # Shared Zod query schemas
+│   └── utils/
+│       ├── errors.js           # ValidationError (HTTP 400)
+│       └── pagination.js       # Pagination, filtering, sorting, search
 ├── test/
+│   ├── common.schema.test.js   # Query schema tests
+│   ├── logger.test.js          # Logger unit tests
+│   ├── pagination.test.js      # Pagination utility tests
 │   └── server.test.js          # Server integration tests
 ├── index.js                    # Express app entry point
 ├── package.json                # Project metadata and dependencies
-├── README.md                   # You are here
-└── Dockerfile                  # Docker image definition
+└── README.md                   # You are here
 ```
 
 ### Middleware Pipeline (Planned)

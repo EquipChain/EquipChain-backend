@@ -1,4 +1,10 @@
+require('./src/config/tracing');
+
+const crypto = require('crypto');
 const express = require('express');
+const { trace } = require('@opentelemetry/api');
+const { childLogger } = require('./src/config/logger');
+
 const app = express();
 const docsRoutes = require('./src/routes/docs');
 const contractId = process.env.CONTRACT_ID || 'CB7PSJZALNWNX7NLOAM6LOEL4OJZMFPQZJMIYO522ZSACYWXTZIDEDSS';
@@ -39,6 +45,6 @@ app.get('/', (req, res) => {
 app.use(docsRoutes);
 
 if (require.main === module) {
-  app.listen(3000, () => console.log('Equipchain API running'));
+  app.listen(3000, () => log.info('Equipchain API running'));
 }
 module.exports = app;

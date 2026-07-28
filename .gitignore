@@ -17,6 +17,13 @@ dist/
 build/
 *.tsbuildinfo
 
+# k6 test results (but track .gitkeep to preserve directory)
+k6/results/*
+!k6/results/.gitkeep
+
+# Generated HTML reports (including k6 output)
+*.html
+
 # Editors
 .vscode/
 .idea/

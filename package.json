@@ -5,7 +5,13 @@
   "main": "index.js",
   "scripts": {
     "test": "node --test",
-    "start": "node index.js"
+    "start": "node index.js",
+    "k6:smoke": "k6 run k6/smoke.js",
+    "k6:load": "k6 run k6/load.js",
+    "k6:stress": "k6 run k6/stress.js",
+    "k6:spike": "k6 run k6/spike.js",
+    "k6:soak": "k6 run k6/soak.js",
+    "k6:quick": "k6 run k6/smoke.js && k6 run k6/load.js && k6 run k6/stress.js && k6 run k6/spike.js"
   },
   "dependencies": {
     "cors": "^2.8.6",

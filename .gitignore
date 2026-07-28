@@ -1,0 +1,9 @@
+node_modules/
+.env
+
+# k6 test results (but track .gitkeep to preserve directory)
+k6/results/*
+!k6/results/.gitkeep
+
+# Generated HTML reports
+*.html

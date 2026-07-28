@@ -71,6 +71,10 @@ app.get('/api/protected', (req, res) => {
   });
 });
 
+// Analytics routes
+const analyticsRouter = require('./src/routes/analytics');
+app.use('/api/analytics', analyticsRouter);
+
 app.get('/', (req, res) => {
   res.json({
     project: 'Equipchain',
@@ -78,6 +82,13 @@ app.get('/', (req, res) => {
     contract: contractId,
   });
 });
+
+// Auto-seed sample data in development mode only (not during tests)
+if (process.env.NODE_ENV !== 'test' && process.env.NODE_ENV !== 'production' && process.env.SKIP_SEED !== '1') {
+  const { seedReadings } = require('./scripts/seed-readings');
+  const count = seedReadings();
+  log.info({ readingsSeeded: count }, 'Sample meter readings seeded');
+}
 
 if (require.main === module) {
   app.listen(3000, () => log.info('Equipchain API running'));

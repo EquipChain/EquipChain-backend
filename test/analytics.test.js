@@ -83,8 +83,10 @@ describe('GET /api/analytics/daily-summary', () => {
       `${BASE()}/api/analytics/daily-summary?startDate=2026-01-01&endDate=2026-01-03&meterIds=${M1}`
     );
     const body = await res.json();
-    // With only M1: Jan 1 = 300 (100+200), Jan 2 = 150, Jan 3 = 300
-    assert.strictEqual(body.data[0].value, 300);
+    // With only M1 and default aggregationType=avg:
+    // Jan 1: (100+200)/2 = 150
+    assert.strictEqual(body.data[0].value, 150);
+    // Jan 2: 150
     assert.strictEqual(body.data[1].value, 150);
   });
 

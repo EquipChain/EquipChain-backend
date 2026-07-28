@@ -75,6 +75,14 @@ app.get('/api/protected', (req, res) => {
 const analyticsRouter = require('./src/routes/analytics');
 app.use('/api/analytics', analyticsRouter);
 
+// Admin Webhooks routes
+const adminWebhooksRouter = require('./src/routes/admin/webhooks');
+app.use('/api/admin/webhooks', adminWebhooksRouter);
+
+// Initialize webhook service listener for application events
+const { webhookService } = require('./src/services/webhook');
+webhookService.startListening();
+
 app.get('/', (req, res) => {
   res.json({
     project: 'Equipchain',

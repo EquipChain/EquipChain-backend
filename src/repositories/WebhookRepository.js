@@ -26,12 +26,20 @@ class WebhookRepository extends BaseRepository {
 
   /**
    * Find webhooks registered for a specific event.
+   * Supports matching single event string, events array, or wildcard '*'.
    * @param {string} event
    * @returns {Promise<Array>}
    */
   async findByEvent(event) {
     return [...this._store.values()]
-      .filter((w) => w.event === event && w.status === 'active')
+      .filter((w) => {
+        if (w.status !== 'active') return false;
+        if (w.event === event || w.event === '*') return true;
+        if (Array.isArray(w.events)) {
+          return w.events.includes(event) || w.events.includes('*');
+        }
+        return false;
+      })
       .map((w) => ({ ...w }));
   }
 
@@ -63,17 +71,21 @@ class WebhookRepository extends BaseRepository {
   /**
    * Log a delivery attempt for a webhook.
    * @param {string} webhookId
-   * @param {number} statusCode - HTTP status code returned
-   * @param {Object} [response] - Optional response body
+   * @param {number} statusCode - HTTP status code returned (or 0 for network failure)
+   * @param {Object|string|null} [response] - Optional response body or error
+   * @param {Object} [metadata] - Additional delivery details (attempt, eventId, eventType, etc.)
    */
-  async logDelivery(webhookId, statusCode, response) {
+  async logDelivery(webhookId, statusCode, response, metadata = {}) {
     if (!this._deliveryLogs.has(webhookId)) {
       this._deliveryLogs.set(webhookId, []);
     }
     this._deliveryLogs.get(webhookId).push({
+      id: `log_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
+      webhookId,
       timestamp: new Date().toISOString(),
       statusCode,
       response: response || null,
+      ...metadata,
     });
   }
 

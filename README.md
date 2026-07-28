@@ -189,6 +189,51 @@ GET /
 }
 ```
 
+### Pagination Modes
+
+List endpoints select a strategy with `?paginate=offset` (default) or `?paginate=cursor`.
+
+**Offset** — `?page=2&limit=20`. Familiar, supports jumping to an arbitrary page, and reports
+`total`/`totalPages`. Best for small to medium result sets.
+
+**Cursor (keyset)** — `?cursor=<opaque>&limit=20` forward, `?before=<opaque>&limit=20` backward.
+Position is anchored to a value rather than a row count, which gives it two properties offset
+paging cannot have: performance independent of how deep you are, and no page drift — rows
+inserted or deleted between requests never cause a client to skip or repeat items. Use it for
+large, append-heavy data such as meter readings, audit logs and webhook delivery logs.
+
+| Parameter | Mode | Description |
+|-----------|------|-------------|
+| `paginate` | both | `offset` (default) or `cursor` |
+| `limit` | both | Items per page, 1–100 (default 20) |
+| `page` | offset | 1-based page number (default 1) |
+| `cursor` | cursor | Page forward from this position |
+| `before` | cursor | Page backward from this position |
+| `sortBy` / `sortOrder` | both | Sort field and `asc`/`desc` |
+
+```json
+GET /meters?paginate=cursor&limit=2
+{
+  "data": [ { "id": 1 }, { "id": 2 } ],
+  "pagination": {
+    "limit": 2,
+    "cursor": null,
+    "nextCursor": "eyJ2IjoxLCJmIjoiaWQiLCJvIjoiYXNjIiwiayI6MiwiaWQiOjJ9",
+    "prevCursor": null,
+    "hasNext": true,
+    "hasPrev": false
+  }
+}
+```
+
+`total` and `totalPages` are absent in cursor mode: counting the full result set is the exact
+cost cursor pagination exists to avoid. Endpoints that need a count can opt in via the
+`includeTotal` option.
+
+**Cursors are opaque.** Pass them back exactly as received — do not construct, parse or edit
+them. A cursor records the sort it was issued for, so replaying one against a different
+`sortBy`/`sortOrder` is rejected with a 400 rather than silently returning the wrong rows.
+
 ---
 
 ## Architecture Overview
@@ -208,9 +253,10 @@ EquipChain-backend/
 │   │   └── common.schema.js    # Shared Zod query schemas
 │   └── utils/
 │       ├── errors.js           # ValidationError (HTTP 400)
-│       └── pagination.js       # Pagination, filtering, sorting, search
+│       └── pagination.js       # Offset + cursor pagination, filtering, sorting, search
 ├── test/
 │   ├── common.schema.test.js   # Query schema tests
+│   ├── cursorPagination.test.js # Cursor (keyset) pagination tests
 │   ├── logger.test.js          # Logger unit tests
 │   ├── pagination.test.js      # Pagination utility tests
 │   └── server.test.js          # Server integration tests

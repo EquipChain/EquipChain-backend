@@ -1,7 +1,12 @@
 const { describe, it } = require('node:test');
 const assert = require('node:assert');
 
-const { paginationQuerySchema, makeListQuerySchema } = require('../src/schemas/common.schema');
+const {
+  paginationQuerySchema,
+  makeListQuerySchema,
+  cursorQuerySchema,
+  makeCursorListQuerySchema,
+} = require('../src/schemas/common.schema');
 const { isIsoDateString } = require('../src/utils/pagination');
 
 function issuePaths(result) {
@@ -143,5 +148,94 @@ describe('makeListQuerySchema', () => {
 
     assert.strictEqual(result.success, true);
     assert.strictEqual(result.data.sortBy, 'anything');
+  });
+});
+
+describe('cursorQuerySchema', () => {
+  it('defaults to offset mode so existing clients are unaffected', () => {
+    const result = cursorQuerySchema.safeParse({});
+
+    assert.strictEqual(result.success, true);
+    assert.deepStrictEqual(result.data, { paginate: 'offset', limit: 20, sortOrder: 'asc' });
+  });
+
+  it('accepts cursor mode with a forward cursor', () => {
+    const result = cursorQuerySchema.safeParse({ paginate: 'cursor', cursor: 'eyJ2IjoxfQ' });
+
+    assert.strictEqual(result.success, true);
+    assert.strictEqual(result.data.paginate, 'cursor');
+    assert.strictEqual(result.data.cursor, 'eyJ2IjoxfQ');
+  });
+
+  it('rejects an unknown pagination mode', () => {
+    const result = cursorQuerySchema.safeParse({ paginate: 'keyset' });
+
+    assert.strictEqual(result.success, false);
+    assert.deepStrictEqual(issuePaths(result), ['paginate']);
+  });
+
+  it('rejects cursor and before together', () => {
+    const result = cursorQuerySchema.safeParse({ cursor: 'abc', before: 'def' });
+
+    assert.strictEqual(result.success, false);
+    assert.deepStrictEqual(issuePaths(result), ['cursor']);
+  });
+
+  it('rejects an empty cursor', () => {
+    const result = cursorQuerySchema.safeParse({ cursor: '' });
+
+    assert.strictEqual(result.success, false);
+    assert.deepStrictEqual(issuePaths(result), ['cursor']);
+  });
+
+  it('does not accept page, which has no meaning for keyset paging', () => {
+    const result = cursorQuerySchema.safeParse({ page: '2' });
+
+    assert.strictEqual(result.success, true);
+    assert.strictEqual('page' in result.data, false);
+  });
+
+  it('caps limit at the shared maximum', () => {
+    assert.strictEqual(cursorQuerySchema.safeParse({ limit: '101' }).success, false);
+    assert.strictEqual(cursorQuerySchema.safeParse({ limit: '100' }).success, true);
+  });
+});
+
+describe('makeCursorListQuerySchema', () => {
+  const schema = makeCursorListQuerySchema({
+    sortableFields: ['id', 'createdAt'],
+    filters: ['status'],
+  });
+
+  it('narrows sortBy and accepts declared filters', () => {
+    const result = schema.safeParse({ sortBy: 'createdAt', status: 'active' });
+
+    assert.strictEqual(result.success, true);
+    assert.strictEqual(result.data.sortBy, 'createdAt');
+    assert.strictEqual(result.data.status, 'active');
+  });
+
+  it('rejects a sort field outside the whitelist', () => {
+    const result = schema.safeParse({ sortBy: 'password' });
+
+    assert.strictEqual(result.success, false);
+    assert.deepStrictEqual(issuePaths(result), ['sortBy']);
+  });
+
+  it('carries the cursor/before conflict check through extend', () => {
+    // Regression guard: Zod 4 keeps refinements across .extend(); on a version that did
+    // not, this conflict would slip past validation and only fail inside paginateCursor.
+    const result = schema.safeParse({ cursor: 'abc', before: 'def' });
+
+    assert.strictEqual(result.success, false);
+    assert.deepStrictEqual(issuePaths(result), ['cursor']);
+  });
+
+  it('keeps the cursor-mode defaults', () => {
+    const result = schema.safeParse({});
+
+    assert.strictEqual(result.success, true);
+    assert.strictEqual(result.data.paginate, 'offset');
+    assert.strictEqual(result.data.limit, 20);
   });
 });

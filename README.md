@@ -27,11 +27,11 @@ Express 5 REST API for EquipChain — a decentralized utility meter monitoring a
 EquipChain is a blockchain-powered platform for monitoring, managing, and analyzing utility meter data. This backend service provides:
 
 - **REST API** — Query meter status, contract data, and project information via a clean JSON API.
+- **Dashboard Analytics** — Data aggregation endpoints for daily, monthly, custom-range summaries and fleet-wide metrics.
 - **Soroban Integration** — Reads on-chain data from Stellar Soroban smart contracts for transparent, immutable meter records.
 - **Real-time Capabilities** — Built on Express 5 with WebSocket support for live meter updates.
 - **Redis Caching** — High-performance data caching for frequently accessed meter readings.
 - **Docker Support** — Containerized deployment for consistent environments.
-- **Dashboard Analytics** — Data aggregation endpoints for daily, monthly, and custom-range summaries with fleet-wide metrics.
 
 ### Tech Stack
 
@@ -46,7 +46,7 @@ EquipChain is a blockchain-powered platform for monitoring, managing, and analyz
 
 ### Project Status
 
-**Current Phase:** MVP — Core meter monitoring endpoints are operational. The API serves project metadata, on-chain contract data, and provides dashboard analytics aggregation. Future releases will add full CRUD for meters, WebSocket event streaming, and admin management.
+**Current Phase:** MVP — Core meter monitoring endpoints are operational. The API serves project metadata and on-chain contract data, and provides dashboard analytics aggregation. Future releases will add full CRUD for meters, WebSocket event streaming, and admin management.
 
 ---
 
@@ -101,7 +101,7 @@ curl http://localhost:3000
 # {"project":"Equipchain","status":"Monitoring Meters","contract":"CB7PSJZALNWNX7NLOAM6LOEL4OJZMFPQZJMIYO522ZSACYWXTZIDEDSS"}
 ```
 
-> **Note:** On first startup in development mode, the server automatically seeds ~6,480 sample meter readings across 3 meters spanning 90 days. Set `SKIP_SEED=1` to disable auto-seeding.
+> **Note:** On first startup in development mode, the server automatically seeds ~6,480 sample meter readings across 3 meters spanning 90 days. This provides test data for the analytics endpoints immediately. Set `SKIP_SEED=1` to disable auto-seeding.
 
 ---
 
@@ -128,6 +128,8 @@ All endpoints return JSON. Base URL: `http://localhost:3000` (development) or yo
 | `POST` | `/auth/logout` | Invalidate current session | Yes |
 
 ### Analytics
+
+Dashboard analytics and data aggregation endpoints for meter readings. Computed in-memory from stored readings.
 
 | Method | Path | Description | Auth |
 |--------|------|-------------|------|
@@ -173,21 +175,17 @@ GET /api/analytics/daily-summary?startDate=2026-01-01&endDate=2026-01-03&aggrega
 
 #### GET /api/analytics/monthly-summary
 
-Same parameters as `daily-summary` but returns monthly rollups.
+Same parameters as daily-summary, returns monthly rollups.
 
 #### GET /api/analytics/custom-range
 
-**Additional Parameter:** `granularity` — `hour`, `day`, `week`, or `month`
+**Additional Parameter:** `granularity` — `hour`, `day`, `week`, `month`
 
 #### GET /api/analytics/fleet-summary
-
-Returns fleet-wide aggregated summary across all meters.
 
 **Example Response:**
 
 ```json
-GET /api/analytics/fleet-summary
-
 {
   "fleet": {
     "totalReadings": 6480,
@@ -205,6 +203,65 @@ GET /api/analytics/fleet-summary
 }
 ```
 
+### Admin (Planned)
+
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| `GET` | `/admin/users` | List all users | Admin |
+| `GET` | `/admin/users/:id` | Get user details | Admin |
+| `PUT` | `/admin/users/:id` | Update user role/status | Admin |
+| `DELETE` | `/admin/users/:id` | Remove a user | Admin |
+| `GET` | `/admin/system` | System diagnostics | Admin |
+
+### Meters (Planned)
+
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| `GET` | `/meters` | List all registered meters | Yes |
+| `GET` | `/meters/:id` | Get meter details by ID | Yes |
+| `POST` | `/meters` | Register a new meter | Admin |
+| `PUT` | `/meters/:id` | Update meter configuration | Admin |
+| `DELETE` | `/meters/:id` | Remove a meter | Admin |
+| `GET` | `/meters/:id/readings` | Get readings for a specific meter | Yes |
+
+### Exports (Planned)
+
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| `GET` | `/exports/meters` | Export meter data (CSV/JSON) | Yes |
+| `GET` | `/exports/readings` | Export readings report | Yes |
+
+### Webhooks (Planned)
+
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| `POST` | `/webhooks` | Register a webhook endpoint | Admin |
+| `GET` | `/webhooks` | List registered webhooks | Yes |
+| `DELETE` | `/webhooks/:id` | Remove a webhook | Admin |
+
+### WebSocket (Planned)
+
+| Event | Direction | Description |
+|-------|-----------|-------------|
+| `meter:reading` | Server → Client | Real-time meter reading update |
+| `meter:alert` | Server → Client | Meter anomaly or alert notification |
+| `meter:status` | Server → Client | Meter online/offline status change |
+| `subscribe:meters` | Client → Server | Subscribe to specific meter IDs |
+| `unsubscribe:meters` | Client → Server | Unsubscribe from specific meter IDs |
+
+Connect to `ws://localhost:3000/ws`.
+
+### Example Response
+
+```json
+GET /
+{
+  "project": "Equipchain",
+  "status": "Monitoring Meters",
+  "contract": "CB7PSJZALNWNX7NLOAM6LOEL4OJZMFPQZJMIYO522ZSACYWXTZIDEDSS"
+}
+```
+
 ---
 
 ## Architecture Overview
@@ -215,34 +272,76 @@ GET /api/analytics/fleet-summary
 EquipChain-backend/
 ├── .github/
 │   └── workflows/
-│       └── ci.yml                  # CI pipeline (test on push/PR to main)
+│       └── ci.yml              # CI pipeline (test on push/PR to main)
 ├── scripts/
-│   └── seed-readings.js            # Sample meter readings generator
+│   └── seed-readings.js        # Sample meter readings generator (auto-runs in dev)
 ├── src/
 │   ├── config/
-│   │   ├── logger.js               # Pino structured logger
-│   │   └── tracing.js              # OpenTelemetry setup
+│   │   ├── logger.js           # Pino structured logger
+│   │   └── tracing.js          # OpenTelemetry setup
 │   ├── routes/
-│   │   └── analytics.js            # Analytics aggregation endpoints
+│   │   └── analytics.js        # Analytics aggregation endpoints
 │   ├── schemas/
-│   │   ├── analytics.schema.js     # Analytics query validation schemas
-│   │   └── common.schema.js        # Shared Zod query schemas
+│   │   ├── analytics.schema.js # Analytics query validation schemas
+│   │   └── common.schema.js    # Shared Zod query schemas
 │   ├── services/
-│   │   └── aggregator.js           # In-memory aggregation engine
+│   │   └── aggregator.js       # In-memory aggregation engine
 │   └── utils/
-│       ├── errors.js               # ValidationError (HTTP 400)
-│       └── pagination.js           # Pagination, filtering, sorting, search
+│       ├── errors.js           # ValidationError (HTTP 400)
+│       └── pagination.js       # Pagination, filtering, sorting, search
 ├── test/
-│   ├── aggregator.test.js          # Aggregation service unit tests
-│   ├── analytics.test.js           # Analytics endpoint integration tests
-│   ├── common.schema.test.js       # Query schema tests
-│   ├── logger.test.js              # Logger unit tests
-│   ├── pagination.test.js          # Pagination utility tests
-│   └── server.test.js              # Server integration tests
-├── index.js                        # Express app entry point
-├── package.json                    # Project metadata and dependencies
-└── README.md                       # You are here
+│   ├── aggregator.test.js      # Aggregation service unit tests
+│   ├── analytics.test.js       # Analytics endpoint integration tests
+│   ├── common.schema.test.js   # Query schema tests
+│   ├── logger.test.js          # Logger unit tests
+│   ├── pagination.test.js      # Pagination utility tests
+│   └── server.test.js          # Server integration tests
+├── index.js                    # Express app entry point
+├── package.json                # Project metadata and dependencies
+└── README.md                   # You are here
 ```
+
+### Middleware Pipeline (Planned)
+
+```
+Request
+  │
+  ▼
+[Logger]           → HTTP request logging
+[Rate Limiter]     → Rate limiting per IP/user
+[CORS]             → Cross-origin resource sharing
+[Auth]             → JWT verification for protected routes
+[Validator]        → Request body/param validation
+  │
+  ▼
+[Router]           → Dispatches to the appropriate controller
+  │
+  ▼
+[Controller]       → Handles business logic orchestration
+[Service Layer]    → Encapsulates domain logic
+[Repository]       → Data access (Redis / Soroban / DB)
+  │
+  ▼
+[Response]         → JSON serialization and response
+```
+
+### Service Layer
+
+Services encapsulate business logic and are injected into controllers:
+
+- **MeterService** — CRUD operations for meters, reading aggregation
+- **AuthService** — User authentication, JWT management, session handling
+- **AnalyticsService** — Trend computation, anomaly detection, alert generation
+- **ExportService** — Data formatting and file generation (CSV/JSON)
+
+### Data Access (Repository Pattern)
+
+| Repository | Backend | Purpose |
+|------------|---------|---------|
+| `MeterRepository` | Soroban / Redis | On-chain meter state and cached readings |
+| `UserRepository` | PostgreSQL / in-memory | User accounts and roles |
+| `AnalyticsRepository` | Redis | Cached aggregations and computed metrics |
+| `WebhookRepository` | Redis | Webhook endpoint storage and event dispatch |
 
 ---
 
@@ -264,6 +363,8 @@ All configuration is via environment variables. Create a `.env` file in the proj
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | — | No | OTLP collector endpoint for trace export |
 | `OTEL_SERVICE_NAME` | `equipchain-api` | No | Service name reported in traces |
 
+Default `CONTRACT_ID`: `CB7PSJZALNWNX7NLOAM6LOEL4OJZMFPQZJMIYO522ZSACYWXTZIDEDSS`
+
 ---
 
 ## Development Guide
@@ -278,7 +379,7 @@ Tests use Node's built-in `node:test` and `node:assert` modules. No additional t
 
 ### Seed Data
 
-Sample meter reading data spanning 90 days across 3 meters is auto-generated on server start in development mode. To manually seed or re-seed data:
+Sample meter reading data spanning 90 days across 3 meters is auto-generated on server start in development mode. The seed data powers the analytics endpoints with realistic consumption patterns (morning ramp, peak hours, evening decline, night lows). To manually seed or re-seed:
 
 ```bash
 node scripts/seed-readings.js
@@ -288,6 +389,12 @@ node scripts/seed-readings.js
 
 ```bash
 npx eslint .
+```
+
+### Building for Production
+
+```bash
+npm ci --production
 ```
 
 ### Docker

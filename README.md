@@ -27,6 +27,7 @@ Express 5 REST API for EquipChain — a decentralized utility meter monitoring a
 EquipChain is a blockchain-powered platform for monitoring, managing, and analyzing utility meter data. This backend service provides:
 
 - **REST API** — Query meter status, contract data, and project information via a clean JSON API.
+- **Dashboard Analytics** — Data aggregation endpoints for daily, monthly, custom-range summaries and fleet-wide metrics.
 - **Soroban Integration** — Reads on-chain data from Stellar Soroban smart contracts for transparent, immutable meter records.
 - **Real-time Capabilities** — Built on Express 5 with WebSocket support for live meter updates.
 - **Redis Caching** — High-performance data caching for frequently accessed meter readings.
@@ -45,7 +46,7 @@ EquipChain is a blockchain-powered platform for monitoring, managing, and analyz
 
 ### Project Status
 
-**Current Phase:** MVP — Core meter monitoring endpoints are operational. The API serves project metadata and on-chain contract data. Future releases will add full CRUD for meters, analytics aggregation, WebSocket event streaming, and admin management.
+**Current Phase:** MVP — Core meter monitoring endpoints are operational. The API serves project metadata and on-chain contract data, and provides dashboard analytics aggregation. Future releases will add full CRUD for meters, WebSocket event streaming, and admin management.
 
 ---
 
@@ -100,6 +101,8 @@ curl http://localhost:3000
 # {"project":"Equipchain","status":"Monitoring Meters","contract":"CB7PSJZALNWNX7NLOAM6LOEL4OJZMFPQZJMIYO522ZSACYWXTZIDEDSS"}
 ```
 
+> **Note:** On first startup in development mode, the server automatically seeds ~6,480 sample meter readings across 3 meters spanning 90 days. This provides test data for the analytics endpoints immediately. Set `SKIP_SEED=1` to disable auto-seeding.
+
 ---
 
 ## API Reference
@@ -111,18 +114,96 @@ All endpoints return JSON. Base URL: `http://localhost:3000` (development) or yo
 | Method | Path | Description | Auth |
 |--------|------|-------------|------|
 | `GET` | `/` | Project metadata (name, status, contract ID) | No |
-| `GET` | `/health` | Health check | No |
+| `GET` | `/api/health` | Health check (uptime, status, timestamp) | No |
 
 ### Auth
 
 | Method | Path | Description | Auth |
 |--------|------|-------------|------|
+| `POST` | `/api/auth/challenge` | Mock wallet-based auth challenge (returns JWT) | No |
+| `GET` | `/api/protected` | Protected route requiring Bearer token | Yes |
 | `POST` | `/auth/login` | Authenticate and receive a JWT | No |
 | `POST` | `/auth/register` | Create a new user account | No |
 | `POST` | `/auth/refresh` | Refresh an expired token | Yes |
 | `POST` | `/auth/logout` | Invalidate current session | Yes |
 
-### Admin
+### Analytics
+
+Dashboard analytics and data aggregation endpoints for meter readings. Computed in-memory from stored readings.
+
+| Method | Path | Description | Auth |
+|--------|------|-------------|------|
+| `GET` | `/api/analytics/daily-summary` | Daily aggregated readings within a date range | No |
+| `GET` | `/api/analytics/monthly-summary` | Monthly aggregated readings within a date range | No |
+| `GET` | `/api/analytics/custom-range` | Aggregated readings with configurable granularity | No |
+| `GET` | `/api/analytics/fleet-summary` | Fleet-wide summary across all meters | No |
+
+#### GET /api/analytics/daily-summary
+
+**Query Parameters:**
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `startDate` | string (ISO 8601) | Required | Start date (e.g., `2026-01-01`) |
+| `endDate` | string (ISO 8601) | Required | End date (e.g., `2026-01-31`) |
+| `meterIds` | string or string[] | All meters | Filter by one or more meter IDs |
+| `timezone` | string (IANA) | `UTC` | Timezone for day boundaries |
+| `aggregationType` | enum | `avg` | `count`, `sum`, `avg`, `min`, `max`, `p50`, `p95` |
+| `compareWith` | enum | — | `previous_period`, `year_over_year` |
+
+**Example Response:**
+
+```json
+GET /api/analytics/daily-summary?startDate=2026-01-01&endDate=2026-01-03&aggregationType=sum
+
+{
+  "data": [
+    { "key": "2026-01-01", "value": 350, "count": 3 },
+    { "key": "2026-01-02", "value": 225, "count": 2 },
+    { "key": "2026-01-03", "value": 425, "count": 2 }
+  ],
+  "meta": {
+    "startDate": "2026-01-01",
+    "endDate": "2026-01-03",
+    "granularity": "day",
+    "aggregationType": "sum",
+    "timezone": "UTC",
+    "totalReadings": 7
+  }
+}
+```
+
+#### GET /api/analytics/monthly-summary
+
+Same parameters as daily-summary, returns monthly rollups.
+
+#### GET /api/analytics/custom-range
+
+**Additional Parameter:** `granularity` — `hour`, `day`, `week`, `month`
+
+#### GET /api/analytics/fleet-summary
+
+**Example Response:**
+
+```json
+{
+  "fleet": {
+    "totalReadings": 6480,
+    "totalMeters": 3,
+    "value": 112.5,
+    "aggregationType": "avg"
+  },
+  "meters": [
+    { "meterId": "METER-001", "value": 150.2, "readings": 2160 },
+    { "meterId": "METER-002", "value": 85.3, "readings": 2160 },
+    { "meterId": "METER-003", "value": 102.0, "readings": 2160 }
+  ],
+  "topPerformer": { "meterId": "METER-001", "value": 150.2, "readings": 2160 },
+  "bottomPerformer": { "meterId": "METER-002", "value": 85.3, "readings": 2160 }
+}
+```
+
+### Admin (Planned)
 
 | Method | Path | Description | Auth |
 |--------|------|-------------|------|
@@ -132,7 +213,7 @@ All endpoints return JSON. Base URL: `http://localhost:3000` (development) or yo
 | `DELETE` | `/admin/users/:id` | Remove a user | Admin |
 | `GET` | `/admin/system` | System diagnostics | Admin |
 
-### Meters
+### Meters (Planned)
 
 | Method | Path | Description | Auth |
 |--------|------|-------------|------|
@@ -143,22 +224,14 @@ All endpoints return JSON. Base URL: `http://localhost:3000` (development) or yo
 | `DELETE` | `/meters/:id` | Remove a meter | Admin |
 | `GET` | `/meters/:id/readings` | Get readings for a specific meter | Yes |
 
-### Analytics
-
-| Method | Path | Description | Auth |
-|--------|------|-------------|------|
-| `GET` | `/analytics/summary` | Aggregate consumption summary | Yes |
-| `GET` | `/analytics/trends` | Consumption trends over time | Yes |
-| `GET` | `/analytics/alerts` | Active alerts and anomalies | Yes |
-
-### Exports
+### Exports (Planned)
 
 | Method | Path | Description | Auth |
 |--------|------|-------------|------|
 | `GET` | `/exports/meters` | Export meter data (CSV/JSON) | Yes |
 | `GET` | `/exports/readings` | Export readings report | Yes |
 
-### Webhooks
+### Webhooks (Planned)
 
 | Method | Path | Description | Auth |
 |--------|------|-------------|------|
@@ -166,7 +239,7 @@ All endpoints return JSON. Base URL: `http://localhost:3000` (development) or yo
 | `GET` | `/webhooks` | List registered webhooks | Yes |
 | `DELETE` | `/webhooks/:id` | Remove a webhook | Admin |
 
-### WebSocket
+### WebSocket (Planned)
 
 | Event | Direction | Description |
 |-------|-----------|-------------|
@@ -245,16 +318,25 @@ EquipChain-backend/
 ├── .github/
 │   └── workflows/
 │       └── ci.yml              # CI pipeline (test on push/PR to main)
+├── scripts/
+│   └── seed-readings.js        # Sample meter readings generator (auto-runs in dev)
 ├── src/
 │   ├── config/
 │   │   ├── logger.js           # Pino structured logger
 │   │   └── tracing.js          # OpenTelemetry setup
+│   ├── routes/
+│   │   └── analytics.js        # Analytics aggregation endpoints
 │   ├── schemas/
+│   │   ├── analytics.schema.js # Analytics query validation schemas
 │   │   └── common.schema.js    # Shared Zod query schemas
+│   ├── services/
+│   │   └── aggregator.js       # In-memory aggregation engine
 │   └── utils/
 │       ├── errors.js           # ValidationError (HTTP 400)
 │       └── pagination.js       # Offset + cursor pagination, filtering, sorting, search
 ├── test/
+│   ├── aggregator.test.js      # Aggregation service unit tests
+│   ├── analytics.test.js       # Analytics endpoint integration tests
 │   ├── common.schema.test.js   # Query schema tests
 │   ├── cursorPagination.test.js # Cursor (keyset) pagination tests
 │   ├── logger.test.js          # Logger unit tests
@@ -323,13 +405,9 @@ All configuration is via environment variables. Create a `.env` file in the proj
 | `WS_PATH` | `/ws` | No | WebSocket endpoint path |
 | `NODE_ENV` | `development` | No | `development`, `test`, or `production` |
 | `LOG_LEVEL` | `info` | No | `debug`, `info`, `warn`, `error` |
-| `OTEL_EXPORTER_OTLP_ENDPOINT` | — | No | OTLP collector endpoint for trace export (e.g. `http://localhost:4318`) |
+| `SKIP_SEED` | — | No | Set to `1` to skip auto-seeding sample data |
+| `OTEL_EXPORTER_OTLP_ENDPOINT` | — | No | OTLP collector endpoint for trace export |
 | `OTEL_SERVICE_NAME` | `equipchain-api` | No | Service name reported in traces |
-| `JWT_SECRET` | — | Yes (in production) | Secret key for signing JWTs |
-| `JWT_EXPIRY` | `1h` | No | JWT expiration duration |
-| `RATE_LIMIT_WINDOW` | `900000` | No | Rate limit window in ms (default 15 min) |
-| `RATE_LIMIT_MAX` | `100` | No | Max requests per window |
-| `CORS_ORIGIN` | `*` | No | Allowed CORS origins |
 
 Default `CONTRACT_ID`: `CB7PSJZALNWNX7NLOAM6LOEL4OJZMFPQZJMIYO522ZSACYWXTZIDEDSS`
 
@@ -345,10 +423,17 @@ npm test
 
 Tests use Node's built-in `node:test` and `node:assert` modules. No additional test framework is required.
 
+### Seed Data
+
+Sample meter reading data spanning 90 days across 3 meters is auto-generated on server start in development mode. The seed data powers the analytics endpoints with realistic consumption patterns (morning ramp, peak hours, evening decline, night lows). To manually seed or re-seed:
+
+```bash
+node scripts/seed-readings.js
+```
+
 ### Linting
 
 ```bash
-# Lint all JavaScript files
 npx eslint .
 ```
 
@@ -361,19 +446,8 @@ npm ci --production
 ### Docker
 
 ```bash
-# Build the image
 docker build -t equipchain-backend .
-
-# Run the container
 docker run -p 3000:3000 --env-file .env equipchain-backend
-```
-
-### Environment
-
-Copy the example env file and customize:
-
-```bash
-cp .env.example .env
 ```
 
 ---
@@ -411,12 +485,9 @@ The included GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every 
 
 ### Production Considerations
 
-- Set `NODE_ENV=production` to disable debug logging
-- Always configure `JWT_SECRET` with a strong random value
-- Enable rate limiting to protect endpoints
-- Use Redis for session caching and meter data
-- Run behind a reverse proxy (nginx, Caddy) for SSL termination
-- Configure health check monitoring on `/health`
+- Set `NODE_ENV=production` to disable debug logging and auto-seeding
+- Use a reverse proxy (nginx, Caddy) for SSL termination
+- Configure health check monitoring on `/api/health`
 
 ---
 

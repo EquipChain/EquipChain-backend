@@ -101,7 +101,7 @@ curl http://localhost:3000
 # {"project":"Equipchain","status":"Monitoring Meters","contract":"CB7PSJZALNWNX7NLOAM6LOEL4OJZMFPQZJMIYO522ZSACYWXTZIDEDSS"}
 ```
 
-> **Note:** On first startup in development mode, the server automatically seeds ~6,480 sample meter readings across 3 meters spanning 90 days. This provides data for testing the analytics endpoints immediately. Set `SKIP_SEED=1` to disable auto-seeding.
+> **Note:** On first startup in development mode, the server automatically seeds ~6,480 sample meter readings across 3 meters spanning 90 days. Set `SKIP_SEED=1` to disable auto-seeding.
 
 ---
 
@@ -122,10 +122,12 @@ All endpoints return JSON. Base URL: `http://localhost:3000` (development) or yo
 |--------|------|-------------|------|
 | `POST` | `/api/auth/challenge` | Mock wallet-based auth challenge (returns JWT) | No |
 | `GET` | `/api/protected` | Protected route requiring Bearer token | Yes |
+| `POST` | `/auth/login` | Authenticate and receive a JWT | No |
+| `POST` | `/auth/register` | Create a new user account | No |
+| `POST` | `/auth/refresh` | Refresh an expired token | Yes |
+| `POST` | `/auth/logout` | Invalidate current session | Yes |
 
 ### Analytics
-
-Dashboard analytics and data aggregation endpoints for meter readings. Results are computed in-memory from stored readings.
 
 | Method | Path | Description | Auth |
 |--------|------|-------------|------|
@@ -136,8 +138,6 @@ Dashboard analytics and data aggregation endpoints for meter readings. Results a
 
 #### GET /api/analytics/daily-summary
 
-Returns daily aggregated meter readings within a date range.
-
 **Query Parameters:**
 
 | Parameter | Type | Default | Description |
@@ -145,9 +145,9 @@ Returns daily aggregated meter readings within a date range.
 | `startDate` | string (ISO 8601) | Required | Start date (e.g., `2026-01-01`) |
 | `endDate` | string (ISO 8601) | Required | End date (e.g., `2026-01-31`) |
 | `meterIds` | string or string[] | All meters | Filter by one or more meter IDs |
-| `timezone` | string (IANA) | `UTC` | Timezone for day boundaries (e.g., `America/New_York`) |
-| `aggregationType` | enum | `avg` | Aggregation function: `count`, `sum`, `avg`, `min`, `max`, `p50`, `p95` |
-| `compareWith` | enum | — | Period comparison: `previous_period`, `year_over_year` |
+| `timezone` | string (IANA) | `UTC` | Timezone for day boundaries |
+| `aggregationType` | enum | `avg` | `count`, `sum`, `avg`, `min`, `max`, `p50`, `p95` |
+| `compareWith` | enum | — | `previous_period`, `year_over_year` |
 
 **Example Response:**
 
@@ -171,62 +171,17 @@ GET /api/analytics/daily-summary?startDate=2026-01-01&endDate=2026-01-03&aggrega
 }
 ```
 
-**With Period Comparison:**
-
-```json
-GET /api/analytics/daily-summary?startDate=2026-01-01&endDate=2026-01-31&aggregationType=sum&compareWith=previous_period
-
-{
-  "data": [ ... ],
-  "meta": { ... },
-  "comparison": {
-    "current": [ ... ],
-    "previous": [ ... ],
-    "comparison": {
-      "delta": 5200,
-      "percentageChange": 12.5
-    },
-    "mode": "previous_period"
-  }
-}
-```
-
 #### GET /api/analytics/monthly-summary
 
 Same parameters as `daily-summary` but returns monthly rollups.
 
 #### GET /api/analytics/custom-range
 
-Returns aggregated readings with a configurable granularity.
-
-**Query Parameters:**
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `startDate` | string (ISO 8601) | Required | Start date |
-| `endDate` | string (ISO 8601) | Required | End date |
-| `granularity` | enum | `day` | Time bucket: `hour`, `day`, `week`, `month` |
-| `meterIds` | string or string[] | All meters | Filter by meter IDs |
-| `timezone` | string (IANA) | `UTC` | Timezone for boundaries |
-| `aggregationType` | enum | `avg` | Aggregation function |
-
-**Example:**
-
-```
-GET /api/analytics/custom-range?startDate=2026-01-01&endDate=2026-01-01&granularity=hour&aggregationType=avg
-```
+**Additional Parameter:** `granularity` — `hour`, `day`, `week`, or `month`
 
 #### GET /api/analytics/fleet-summary
 
 Returns fleet-wide aggregated summary across all meters.
-
-**Query Parameters:**
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `startDate` | string (ISO 8601) | — | Optional start date filter |
-| `endDate` | string (ISO 8601) | — | Optional end date filter |
-| `aggregationType` | enum | `avg` | Aggregation function |
 
 **Example Response:**
 
@@ -260,33 +215,33 @@ GET /api/analytics/fleet-summary
 EquipChain-backend/
 ├── .github/
 │   └── workflows/
-│       └── ci.yml              # CI pipeline (test on push/PR to main)
+│       └── ci.yml                  # CI pipeline (test on push/PR to main)
 ├── scripts/
-│   └── seed-readings.js        # Sample meter readings generator (auto-runs in dev)
+│   └── seed-readings.js            # Sample meter readings generator
 ├── src/
 │   ├── config/
-│   │   ├── logger.js           # Pino structured logger
-│   │   └── tracing.js          # OpenTelemetry setup
+│   │   ├── logger.js               # Pino structured logger
+│   │   └── tracing.js              # OpenTelemetry setup
 │   ├── routes/
-│   │   └── analytics.js        # Analytics aggregation endpoints
+│   │   └── analytics.js            # Analytics aggregation endpoints
 │   ├── schemas/
-│   │   ├── analytics.schema.js # Analytics query validation schemas
-│   │   └── common.schema.js    # Shared Zod query schemas
+│   │   ├── analytics.schema.js     # Analytics query validation schemas
+│   │   └── common.schema.js        # Shared Zod query schemas
 │   ├── services/
-│   │   └── aggregator.js       # In-memory aggregation engine
+│   │   └── aggregator.js           # In-memory aggregation engine
 │   └── utils/
-│       ├── errors.js           # ValidationError (HTTP 400)
-│       └── pagination.js       # Pagination, filtering, sorting, search
+│       ├── errors.js               # ValidationError (HTTP 400)
+│       └── pagination.js           # Pagination, filtering, sorting, search
 ├── test/
-│   ├── aggregator.test.js      # Aggregation service unit tests
-│   ├── analytics.test.js       # Analytics endpoint integration tests
-│   ├── common.schema.test.js   # Query schema tests
-│   ├── logger.test.js          # Logger unit tests
-│   ├── pagination.test.js      # Pagination utility tests
-│   └── server.test.js          # Server integration tests
-├── index.js                    # Express app entry point
-├── package.json                # Project metadata and dependencies
-└── README.md                   # You are here
+│   ├── aggregator.test.js          # Aggregation service unit tests
+│   ├── analytics.test.js           # Analytics endpoint integration tests
+│   ├── common.schema.test.js       # Query schema tests
+│   ├── logger.test.js              # Logger unit tests
+│   ├── pagination.test.js          # Pagination utility tests
+│   └── server.test.js              # Server integration tests
+├── index.js                        # Express app entry point
+├── package.json                    # Project metadata and dependencies
+└── README.md                       # You are here
 ```
 
 ---
@@ -323,9 +278,7 @@ Tests use Node's built-in `node:test` and `node:assert` modules. No additional t
 
 ### Seed Data
 
-Sample meter reading data spanning 90 days across 3 meters is auto-generated on server start in development mode. The seed data powers the analytics endpoints with realistic consumption patterns including morning ramp, peak hours, evening decline, and night lows.
-
-To manually seed or re-seed data:
+Sample meter reading data spanning 90 days across 3 meters is auto-generated on server start in development mode. To manually seed or re-seed data:
 
 ```bash
 node scripts/seed-readings.js
@@ -375,7 +328,7 @@ The included GitHub Actions workflow (`.github/workflows/ci.yml`) runs on every 
 1. **Checkout** — Clone the repository
 2. **Setup Node** — Install Node.js 22 with npm cache
 3. **Install** — `npm ci`
-4. **Test** — `npm test` (runs all 133+ tests)
+4. **Test** — `npm test`
 
 ### Production Considerations
 

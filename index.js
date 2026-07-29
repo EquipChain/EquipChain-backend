@@ -109,3 +109,5 @@ if (require.main === module) {
   app.listen(3000, () => log.info('Equipchain API running'));
 }
 module.exports = app;
+
+module.exports = app;

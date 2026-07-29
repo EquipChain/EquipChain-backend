@@ -1,29 +1,25 @@
 require('./src/config/tracing');
-
 const crypto = require('crypto');
 const express = require('express');
 const { trace } = require('@opentelemetry/api');
 const { childLogger } = require('./src/config/logger');
-
+const { authenticate } = require('./src/middleware/auth');
+const { requireAdmin } = require('./src/middleware/requireAdmin');
+const adminRouter = require('./src/routes/admin');
 const app = express();
-const log = childLogger('http');
-
 app.use(express.json());
-
+const log = childLogger('http');
 const contractId = process.env.CONTRACT_ID || 'CB7PSJZALNWNX7NLOAM6LOEL4OJZMFPQZJMIYO522ZSACYWXTZIDEDSS';
 
 app.use((req, res, next) => {
   const correlationId = req.headers['x-correlation-id'] || crypto.randomUUID();
   req.correlationId = correlationId;
   res.setHeader('x-correlation-id', correlationId);
-
   const activeSpan = trace.getActiveSpan();
   if (activeSpan) {
     activeSpan.setAttribute('correlation.id', correlationId);
   }
-
   const start = process.hrtime.bigint();
-
   res.on('finish', () => {
     const durationMs = Number(process.hrtime.bigint() - start) / 1e6;
     log.info(
@@ -37,7 +33,6 @@ app.use((req, res, next) => {
       'request completed'
     );
   });
-
   next();
 });
 
@@ -82,6 +77,8 @@ app.get('/', (req, res) => {
     contract: contractId,
   });
 });
+
+app.use('/api/admin', authenticate, requireAdmin, adminRouter);
 
 // Auto-seed sample data in development mode only (not during tests)
 if (process.env.NODE_ENV !== 'test' && process.env.NODE_ENV !== 'production' && process.env.SKIP_SEED !== '1') {

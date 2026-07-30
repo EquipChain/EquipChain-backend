@@ -1,0 +1,11 @@
+services:
+  api:
+    build:
+      target: builder
+    environment:
+      NODE_ENV: ${NODE_ENV:-development}
+      SKIP_SEED: ${SKIP_SEED:-1}
+    command: ["node", "--watch", "index.js"]
+    volumes:
+      - ./:/app
+      - /app/node_modules

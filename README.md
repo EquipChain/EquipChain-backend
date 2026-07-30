@@ -499,8 +499,21 @@ npm ci --production
 ### Docker
 
 ```bash
-docker build -t equipchain-backend .
-docker run -p 3000:3000 --env-file .env equipchain-backend
+docker build -t equipchain-backend:local .
+docker run --rm -p 3000:3000 --env-file .env equipchain-backend:local
+```
+
+Run the full local stack (API + Redis) with Docker Compose:
+
+```bash
+docker compose up --build
+```
+
+Helper scripts:
+
+```bash
+sh scripts/docker-build.sh
+sh scripts/docker-run.sh
 ```
 
 ---
@@ -603,12 +616,18 @@ Test results (HTML reports, JSON summaries) are stored in `k6/results/`. This di
 ### Docker (Recommended)
 
 ```bash
-docker build -t equipchain-backend .
+docker build -t equipchain-backend:local .
 docker run -d \
   --name equipchain-api \
   -p 3000:3000 \
   --env-file .env \
-  equipchain-backend
+  equipchain-backend:local
+```
+
+Docker Compose (API + Redis):
+
+```bash
+docker compose up -d --build
 ```
 
 ### Cloud Platforms

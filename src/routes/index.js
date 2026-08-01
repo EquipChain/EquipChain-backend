@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { services } = require('../services');
+const { cache } = require('../services/cache');
 
 // Import route modules here as they are created
 // const authRoutes = require('./auth');
@@ -32,6 +33,11 @@ router.get('/health', (req, res) => {
       schedules: services.scheduler.getAllSchedules().length,
       isRunning: services.scheduler.isRunning,
     };
+  }
+
+  // Add cache stats if cache service is available
+  if (cache) {
+    healthData.cache = cache.health();
   }
 
   res.json(healthData);

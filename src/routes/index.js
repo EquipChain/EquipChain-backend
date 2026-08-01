@@ -1,17 +1,18 @@
 const express = require('express');
 const router = express.Router();
 const { services } = require('../services');
+const { cache } = require('../services/cache');
 
 // Import route modules here as they are created
 // const authRoutes = require('./auth');
-// const adminRoutes = require('./admin');
-// const analyticsRoutes = require('./analytics');
+const adminRoutes = require('./admin');
+const analyticsRoutes = require('./analytics');
 const exportRoutes = require('./exports');
 
 // Mount routes under their respective prefixes
 // router.use('/api/auth', authRoutes);
-// router.use('/api/admin', adminRoutes);
-// router.use('/api/analytics', analyticsRoutes);
+router.use('/api/admin', adminRoutes);
+router.use('/api/analytics', analyticsRoutes);
 router.use('/api/exports', exportRoutes);
 
 // Health check route
@@ -32,6 +33,11 @@ router.get('/health', (req, res) => {
       schedules: services.scheduler.getAllSchedules().length,
       isRunning: services.scheduler.isRunning,
     };
+  }
+
+  // Add cache stats if cache service is available
+  if (cache) {
+    healthData.cache = cache.health();
   }
 
   res.json(healthData);

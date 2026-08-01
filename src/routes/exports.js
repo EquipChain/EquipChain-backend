@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const { handleExport } = require('../services/exporter');
 const { childLogger } = require('../config/logger');
+const { validate } = require('../middleware/validate');
+const { readingsQuerySchema, analyticsExportSchema, createReadingSchema, bulkReadingsSchema } = require('../schemas/metering.schema');
 
 const log = childLogger('routes:exports');
 

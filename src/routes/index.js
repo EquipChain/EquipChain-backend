@@ -4,14 +4,14 @@ const { services } = require('../services');
 
 // Import route modules here as they are created
 // const authRoutes = require('./auth');
-// const adminRoutes = require('./admin');
-// const analyticsRoutes = require('./analytics');
+const adminRoutes = require('./admin');
+const analyticsRoutes = require('./analytics');
 const exportRoutes = require('./exports');
 
 // Mount routes under their respective prefixes
 // router.use('/api/auth', authRoutes);
-// router.use('/api/admin', adminRoutes);
-// router.use('/api/analytics', analyticsRoutes);
+router.use('/api/admin', adminRoutes);
+router.use('/api/analytics', analyticsRoutes);
 router.use('/api/exports', exportRoutes);
 
 // Health check route

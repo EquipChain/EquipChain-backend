@@ -5,9 +5,14 @@ const { trace } = require('@opentelemetry/api');
 const { childLogger } = require('./src/config/logger');
 const { authenticate } = require('./src/middleware/auth');
 const { requireAdmin } = require('./src/middleware/requireAdmin');
+const { rateLimiter, determineTier } = require('./src/middleware/rateLimiter');
+const { RATE_LIMIT_TIERS } = require('./src/config/rateLimits');
 const adminRouter = require('./src/routes/admin');
 const app = express();
 app.use(express.json());
+
+// Apply tiered rate limiter globally before all routes
+app.use(rateLimiter);
 const log = childLogger('http');
 const contractId = process.env.CONTRACT_ID || 'CB7PSJZALNWNX7NLOAM6LOEL4OJZMFPQZJMIYO522ZSACYWXTZIDEDSS';
 
@@ -42,6 +47,36 @@ app.get('/api/health', (req, res) => {
     status: 'healthy',
     uptime: process.uptime(),
     timestamp: Date.now(),
+  });
+});
+
+/**
+ * GET /api/system/rate-limits
+ *
+ * Returns the caller's current rate-limit tier, configured limit,
+ * remaining requests in the current window, and when the window resets.
+ *
+ * The rate limiter middleware runs before this handler and populates
+ * req.rateLimit, so the values are always accurate.
+ */
+app.get('/api/system/rate-limits', (req, res) => {
+  const tier = determineTier(req);
+  const tierConfig = RATE_LIMIT_TIERS[tier];
+
+  // req.rateLimit is set by rateLimiter middleware (remaining may already
+  // reflect the cost of this request itself)
+  const limit = req.rateLimit?.limit ?? tierConfig.max;
+  const remaining = req.rateLimit?.remaining ?? tierConfig.max;
+  const resetAt = req.rateLimit?.resetAt ?? Date.now() + tierConfig.windowMs;
+  const resetTime = new Date(resetAt).toISOString();
+  const retryAfter = remaining === 0 ? Math.ceil((resetAt - Date.now()) / 1000) : null;
+
+  res.json({
+    tier,
+    limit,
+    remaining,
+    resetTime,
+    ...(retryAfter !== null && { retryAfter }),
   });
 });
 

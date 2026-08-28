@@ -1,6 +1,7 @@
 const { childLogger } = require('../config/logger');
 const { queue, Priority } = require('./queue');
 const { scheduler } = require('./scheduler');
+const { cacheService } = require('./cache');
 const billingHandler = require('../jobs/billing.job');
 const reportsHandler = require('../jobs/reports.job');
 const syncHandler = require('../jobs/sync.job');
@@ -27,9 +28,10 @@ async function initServices(app) {
   try {
     log.info('Initializing services...');
 
-    // Initialize cache service (if implemented)
-    // services.cache = await initCache();
-    // log.info('Cache service initialized');
+    // Initialize cache service
+    await cacheService.connect();
+    services.cache = cacheService;
+    log.info('Cache service initialized');
 
     // Initialize queue service
     await initQueue();

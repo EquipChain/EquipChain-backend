@@ -2,7 +2,11 @@
 const express = require('express');
 const { deviceStore } = require('../../data/adminStore');
 const { validate } = require('../../middleware/validate');
-const { registerDeviceSchema, updateDeviceSchema } = require('../../schemas/admin.schema');
+const {
+  adminRegisterDeviceSchema,
+  adminUpdateDeviceSchema,
+  adminIdParamSchema,
+} = require('../../schemas/validation.schema');
 const { paginate } = require('../../lib/pagination');
 
 const router = express.Router();
@@ -29,7 +33,7 @@ const router = express.Router();
  *       201: { description: Registered device }
  *       400: { description: Validation failed }
  */
-router.post('/', validate(registerDeviceSchema), (req, res) => {
+router.post('/', validate(adminRegisterDeviceSchema), (req, res) => {
   res.status(201).json(deviceStore.create(req.body));
 });
 
@@ -64,7 +68,7 @@ router.get('/', (req, res) => {
  *       400: { description: Validation failed }
  *       404: { description: Device not found }
  */
-router.patch('/:id', validate(updateDeviceSchema), (req, res) => {
+router.patch('/:id', validate({ ...adminUpdateDeviceSchema, params: adminIdParamSchema.params }), (req, res) => {
   const device = deviceStore.update(req.params.id, req.body);
   if (!device) return res.status(404).json({ error: 'Device not found' });
   res.json(device);
@@ -86,7 +90,7 @@ router.patch('/:id', validate(updateDeviceSchema), (req, res) => {
  *       200: { description: Device removed }
  *       404: { description: Device not found }
  */
-router.delete('/:id', (req, res) => {
+router.delete('/:id', validate(adminIdParamSchema), (req, res) => {
   const removed = deviceStore.remove(req.params.id);
   if (!removed) return res.status(404).json({ error: 'Device not found' });
   res.json({ success: true });

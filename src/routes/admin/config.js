@@ -2,7 +2,7 @@
 const express = require('express');
 const { configStore } = require('../../data/adminStore');
 const { validate } = require('../../middleware/validate');
-const { configUpdateSchema } = require('../../schemas/admin.schema');
+const { adminConfigUpdateSchema } = require('../../schemas/validation.schema');
 
 const router = express.Router();
 
@@ -43,7 +43,7 @@ router.get('/', (req, res) => {
  *       200: { description: Updated configuration }
  *       400: { description: Validation failed }
  */
-router.patch('/', validate(configUpdateSchema), (req, res) => {
+router.patch('/', validate(adminConfigUpdateSchema), (req, res) => {
   res.json(configStore.update(req.body.values, adminIdOf(req)));
 });
 

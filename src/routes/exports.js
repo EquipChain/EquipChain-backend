@@ -2,6 +2,14 @@ const express = require('express');
 const router = express.Router();
 const { handleExport } = require('../services/exporter');
 const { childLogger } = require('../config/logger');
+const { validate } = require('../middleware/validate');
+const {
+  exportReadingsQuerySchema,
+  exportAnalyticsParamsSchema,
+  exportAnalyticsQuerySchema,
+  exportMetersQuerySchema,
+  exportSystemReportQuerySchema,
+} = require('../schemas/validation.schema');
 
 const log = childLogger('routes:exports');
 
@@ -197,7 +205,7 @@ function requireAdmin(req, res, next) {
  *       200: { description: Exported readings }
  *       401: { description: Unauthorized }
  */
-router.get('/readings', authenticate, async (req, res) => {
+router.get('/readings', authenticate, validate(exportReadingsQuerySchema), async (req, res) => {
   try {
     log.info({ query: req.query }, 'Export readings request');
 
@@ -258,7 +266,7 @@ router.get('/readings', authenticate, async (req, res) => {
  *       400: { description: Invalid summary type }
  *       401: { description: Unauthorized }
  */
-router.get('/analytics/:summaryType', authenticate, async (req, res) => {
+router.get('/analytics/:summaryType', authenticate, validate({ ...exportAnalyticsParamsSchema, ...exportAnalyticsQuerySchema }), async (req, res) => {
   try {
     const { summaryType } = req.params;
 
@@ -317,7 +325,7 @@ router.get('/analytics/:summaryType', authenticate, async (req, res) => {
  *       401: { description: Unauthorized }
  *       403: { description: Admin role required }
  */
-router.get('/system-report', authenticate, requireAdmin, async (req, res) => {
+router.get('/system-report', authenticate, requireAdmin, validate(exportSystemReportQuerySchema), async (req, res) => {
   try {
     log.info({ query: req.query }, 'Export system report request');
 
@@ -428,7 +436,7 @@ router.get('/system-report', authenticate, requireAdmin, async (req, res) => {
  *       200: { description: Exported meters }
  *       401: { description: Unauthorized }
  */
-router.get('/meters', authenticate, async (req, res) => {
+router.get('/meters', authenticate, validate(exportMetersQuerySchema), async (req, res) => {
   try {
     log.info({ query: req.query }, 'Export meters request');
 

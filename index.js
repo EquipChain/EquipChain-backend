@@ -5,6 +5,8 @@ const { trace } = require('@opentelemetry/api');
 const { childLogger } = require('./src/config/logger');
 const { authenticate } = require('./src/middleware/auth');
 const { requireAdmin } = require('./src/middleware/requireAdmin');
+const { validate } = require('./src/middleware/validate');
+const { authChallengeSchema } = require('./src/schemas/validation.schema');
 const adminRouter = require('./src/routes/admin');
 const app = express();
 app.use(express.json());
@@ -46,7 +48,7 @@ app.get('/api/health', (req, res) => {
 });
 
 // Auth challenge - returns a mock JWT token
-app.post('/api/auth/challenge', (req, res) => {
+app.post('/api/auth/challenge', validate(authChallengeSchema), (req, res) => {
   const { wallet } = req.body || {};
   res.json({
     token: `mock-jwt-${wallet || 'anonymous'}-${Date.now()}`,

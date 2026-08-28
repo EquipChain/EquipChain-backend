@@ -1,19 +1,16 @@
-/**
- * ApiKeyRepository — API Key Store
- *
- * Manages API keys for programmatic access. Pre-seeds a default development key.
- *
- * Domain-specific methods:
- *   - findByKey(key)
- *   - findByUserId(userId)
- *   - revokeKey(key)
- *   - findActive()
- */
+import * as crypto from 'crypto';
+import { BaseRepository, BaseEntity } from './BaseRepository';
 
-const crypto = require('crypto');
-const BaseRepository = require('./BaseRepository');
+export interface ApiKeyEntity extends BaseEntity {
+  key: string;
+  name: string;
+  userId: string;
+  status: string;
+  permissions: string[];
+  expiresAt: string;
+}
 
-class ApiKeyRepository extends BaseRepository {
+export class ApiKeyRepository extends BaseRepository<ApiKeyEntity> {
   constructor() {
     super({ entityName: 'apiKey' });
     this._allowedFilters = ['status', 'userId'];
@@ -23,21 +20,14 @@ class ApiKeyRepository extends BaseRepository {
     this._seedDefaults();
   }
 
-  /**
-   * Generate a new API key.
-   * @returns {string}
-   */
-  static generateKey() {
+  static generateKey(): string {
     return `ek_${crypto.randomBytes(32).toString('hex')}`;
   }
 
-  /**
-   * Pre-seed a default development API key.
-   */
-  _seedDefaults() {
+  private _seedDefaults(): void {
     if (this._store.size === 0) {
       const now = new Date().toISOString();
-      const devKey = {
+      const devKey: ApiKeyEntity = {
         id: this._generateId(),
         key: 'ek_dev_equipchain_default_key',
         name: 'Development Key',
@@ -52,12 +42,7 @@ class ApiKeyRepository extends BaseRepository {
     }
   }
 
-  /**
-   * Find an API key by its key value.
-   * @param {string} key
-   * @returns {Promise<Object|null>}
-   */
-  async findByKey(key) {
+  async findByKey(key: string): Promise<ApiKeyEntity | null> {
     for (const apiKey of this._store.values()) {
       if (apiKey.key === key) {
         return { ...apiKey };
@@ -66,45 +51,26 @@ class ApiKeyRepository extends BaseRepository {
     return null;
   }
 
-  /**
-   * Find all API keys belonging to a user.
-   * @param {string} userId
-   * @returns {Promise<Array>}
-   */
-  async findByUserId(userId) {
+  async findByUserId(userId: string): Promise<ApiKeyEntity[]> {
     return [...this._store.values()]
       .filter((k) => k.userId === userId)
       .map((k) => ({ ...k }));
   }
 
-  /**
-   * Revoke an API key by setting its status to 'revoked'.
-   * @param {string} key
-   * @returns {Promise<Object|null>}
-   */
-  async revokeKey(key) {
+  async revokeKey(key: string): Promise<ApiKeyEntity | null> {
     const apiKey = await this.findByKey(key);
     if (!apiKey) return null;
-    return this.update(apiKey.id, { status: 'revoked' });
+    return this.update(apiKey.id, { status: 'revoked' } as Partial<ApiKeyEntity>);
   }
 
-  /**
-   * Find all active (non-revoked, non-expired) API keys.
-   * @returns {Promise<Array>}
-   */
-  async findActive() {
+  async findActive(): Promise<ApiKeyEntity[]> {
     const now = new Date().toISOString();
     return [...this._store.values()]
       .filter((k) => k.status === 'active' && k.expiresAt > now)
       .map((k) => ({ ...k }));
   }
 
-  /**
-   * Create a new API key. Respects a passed `key` value; auto-generates one when absent.
-   * @param {Object} data - { name, userId, permissions, key?, expiresAt? }
-   * @returns {Promise<Object>}
-   */
-  async create(data) {
+  async create(data: Partial<ApiKeyEntity>): Promise<ApiKeyEntity> {
     const key = data.key || ApiKeyRepository.generateKey();
     return super.create({
       ...data,
@@ -112,8 +78,8 @@ class ApiKeyRepository extends BaseRepository {
       status: data.status || 'active',
       permissions: data.permissions || ['read'],
       expiresAt: data.expiresAt || new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
-    });
+    } as any);
   }
 }
 
-module.exports = ApiKeyRepository;
+export const apiKeyRepository = new ApiKeyRepository();

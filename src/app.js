@@ -65,6 +65,15 @@ app.use((req, res, next) => {
 app.use('/', routes);
 
 // Root route with project info
+/**
+ * @openapi
+ * /:
+ *   get:
+ *     summary: Project information
+ *     tags: [System]
+ *     responses:
+ *       200: { description: Basic project metadata }
+ */
 app.get('/', (req, res) => {
   res.json({
     project: 'Equipchain',

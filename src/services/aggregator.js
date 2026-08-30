@@ -42,6 +42,15 @@ function addReadings(data) {
     createdAt: item.createdAt || new Date().toISOString(),
   }));
   readings.push(...stored);
+
+  // Broadcast new readings to real-time WebSocket subscribers.
+  try {
+    const websocket = require('./websocket');
+    stored.forEach((reading) => websocket.broadcastMeterReading(reading));
+  } catch (err) {
+    // Broadcasting is best-effort; never block ingestion on WS failures.
+  }
+
   return stored.length === 1 ? stored[0] : stored;
 }
 

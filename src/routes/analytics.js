@@ -1,12 +1,13 @@
 const { Router } = require('express');
 const { childLogger } = require('../config/logger');
 const { getReadings, aggregateReadings, fleetSummary, comparePeriods } = require('../services/aggregator');
+const { validate } = require('../middleware/validate');
 const {
-  dailySummarySchema,
-  monthlySummarySchema,
-  customRangeSchema,
-  fleetSummarySchema,
-} = require('../schemas/analytics.schema');
+  dailySummaryQuerySchema,
+  monthlySummaryQuerySchema,
+  customRangeQuerySchema,
+  fleetSummaryQuerySchema,
+} = require('../schemas/validation.schema');
 
 const router = Router();
 const log = childLogger('analytics');
@@ -127,15 +128,37 @@ function sendAggregatedResponse(req, res, schema, granularity) {
 // ---------------------------------------------------------------------------
 
 /**
- * GET /api/analytics/daily-summary
- *
- * Returns daily aggregated readings within a date range.
- * Query params: startDate, endDate, meterIds (optional), timezone (default UTC),
- *               aggregationType (default avg), compareWith (optional)
+ * @openapi
+ * /api/analytics/daily-summary:
+ *   get:
+ *     summary: Daily aggregated meter readings
+ *     description: Returns daily aggregated readings within a date range.
+ *     tags: [Analytics]
+ *     parameters:
+ *       - in: query
+ *         name: startDate
+ *         required: true
+ *         schema: { type: string, format: date }
+ *       - in: query
+ *         name: endDate
+ *         required: true
+ *         schema: { type: string, format: date }
+ *       - in: query
+ *         name: meterIds
+ *         schema: { type: array, items: { type: string } }
+ *       - in: query
+ *         name: aggregationType
+ *         schema: { type: string, enum: [count, sum, avg, min, max, p50, p95] }
+ *       - in: query
+ *         name: compareWith
+ *         schema: { type: string, enum: [previous_period, year_over_year] }
+ *     responses:
+ *       200: { description: Daily aggregation result }
+ *       400: { description: Validation failed }
  */
-router.get('/daily-summary', (req, res, next) => {
+router.get('/daily-summary', validate(dailySummaryQuerySchema), (req, res, next) => {
   try {
-    sendAggregatedResponse(req, res, dailySummarySchema, 'day');
+    sendAggregatedResponse(req, res, dailySummaryQuerySchema.query, 'day');
   } catch (err) {
     log.error({ err }, 'daily-summary error');
     next(err);
@@ -143,14 +166,37 @@ router.get('/daily-summary', (req, res, next) => {
 });
 
 /**
- * GET /api/analytics/monthly-summary
- *
- * Returns monthly aggregated readings within a date range.
- * Query params: same as daily-summary
+ * @openapi
+ * /api/analytics/monthly-summary:
+ *   get:
+ *     summary: Monthly aggregated meter readings
+ *     description: Returns monthly aggregated readings within a date range.
+ *     tags: [Analytics]
+ *     parameters:
+ *       - in: query
+ *         name: startDate
+ *         required: true
+ *         schema: { type: string, format: date }
+ *       - in: query
+ *         name: endDate
+ *         required: true
+ *         schema: { type: string, format: date }
+ *       - in: query
+ *         name: meterIds
+ *         schema: { type: array, items: { type: string } }
+ *       - in: query
+ *         name: aggregationType
+ *         schema: { type: string, enum: [count, sum, avg, min, max, p50, p95] }
+ *       - in: query
+ *         name: compareWith
+ *         schema: { type: string, enum: [previous_period, year_over_year] }
+ *     responses:
+ *       200: { description: Monthly aggregation result }
+ *       400: { description: Validation failed }
  */
-router.get('/monthly-summary', (req, res, next) => {
+router.get('/monthly-summary', validate(monthlySummaryQuerySchema), (req, res, next) => {
   try {
-    sendAggregatedResponse(req, res, monthlySummarySchema, 'month');
+    sendAggregatedResponse(req, res, monthlySummaryQuerySchema.query, 'month');
   } catch (err) {
     log.error({ err }, 'monthly-summary error');
     next(err);
@@ -158,15 +204,38 @@ router.get('/monthly-summary', (req, res, next) => {
 });
 
 /**
- * GET /api/analytics/custom-range
- *
- * Returns aggregated readings with configurable granularity.
- * Query params: startDate, endDate, granularity (hour|day|week|month),
- *               meterIds (optional), timezone (default UTC), aggregationType (default avg)
+ * @openapi
+ * /api/analytics/custom-range:
+ *   get:
+ *     summary: Aggregated readings over a custom range
+ *     description: Returns aggregated readings with configurable granularity.
+ *     tags: [Analytics]
+ *     parameters:
+ *       - in: query
+ *         name: startDate
+ *         required: true
+ *         schema: { type: string, format: date }
+ *       - in: query
+ *         name: endDate
+ *         required: true
+ *         schema: { type: string, format: date }
+ *       - in: query
+ *         name: granularity
+ *         required: true
+ *         schema: { type: string, enum: [hour, day, week, month] }
+ *       - in: query
+ *         name: meterIds
+ *         schema: { type: array, items: { type: string } }
+ *       - in: query
+ *         name: aggregationType
+ *         schema: { type: string, enum: [count, sum, avg, min, max, p50, p95] }
+ *     responses:
+ *       200: { description: Custom-range aggregation result }
+ *       400: { description: Validation failed }
  */
-router.get('/custom-range', (req, res, next) => {
+router.get('/custom-range', validate(customRangeQuerySchema), (req, res, next) => {
   try {
-    const { parsed, errors } = parseQuery(customRangeSchema, req.query);
+    const { parsed, errors } = parseQuery(customRangeQuerySchema.query, req.query);
     if (errors) {
       return res.status(400).json({ error: 'Validation failed', details: errors });
     }
@@ -205,14 +274,29 @@ router.get('/custom-range', (req, res, next) => {
 });
 
 /**
- * GET /api/analytics/fleet-summary
- *
- * Returns fleet-wide aggregated summary across all meters.
- * Query params: startDate (optional), endDate (optional), aggregationType (default avg)
+ * @openapi
+ * /api/analytics/fleet-summary:
+ *   get:
+ *     summary: Fleet-wide aggregated summary
+ *     description: Returns fleet-wide aggregated summary across all meters.
+ *     tags: [Analytics]
+ *     parameters:
+ *       - in: query
+ *         name: startDate
+ *         schema: { type: string, format: date }
+ *       - in: query
+ *         name: endDate
+ *         schema: { type: string, format: date }
+ *       - in: query
+ *         name: aggregationType
+ *         schema: { type: string, enum: [count, sum, avg, min, max, p50, p95] }
+ *     responses:
+ *       200: { description: Fleet summary }
+ *       400: { description: Validation failed }
  */
-router.get('/fleet-summary', (req, res, next) => {
+router.get('/fleet-summary', validate(fleetSummaryQuerySchema), (req, res, next) => {
   try {
-    const { parsed, errors } = parseQuery(fleetSummarySchema, req.query);
+    const { parsed, errors } = parseQuery(fleetSummaryQuerySchema.query, req.query);
     if (errors) {
       return res.status(400).json({ error: 'Validation failed', details: errors });
     }

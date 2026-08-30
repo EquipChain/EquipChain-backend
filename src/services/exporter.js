@@ -139,7 +139,11 @@ function exportToCSV(dataStream, columns, options = {}) {
   });
 
   dataStream.on('error', (error) => {
-    transformStream.emit('error', error);
+    transformStream.destroy(error);
+  });
+
+  transformStream.on('error', (error) => {
+    csvStream.destroy(error);
   });
 
   transformStream.pipe(csvStream);
@@ -269,6 +273,7 @@ async function handleExport(req, res, data, availableFields, exportType) {
   } catch (error) {
     log.error({ error }, 'Export request error');
     if (!res.headersSent) {
+      res.removeHeader('Transfer-Encoding');
       res.status(400).json({ error: error.message });
     }
   }

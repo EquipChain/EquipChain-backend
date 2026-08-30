@@ -78,18 +78,18 @@ class JobQueue extends EventEmitter {
 
     if (job.delay > 0) {
       // Schedule for delayed execution
+      this.emit('added', job);
+      log.info({ jobId, type, priority: job.priority, delay: job.delay }, 'Job added to queue');
       setTimeout(() => {
         if (job.status === JobStatus.QUEUED) {
           this._enqueue(jobId);
         }
       }, job.delay);
-      log.info({ jobId, type, delay: job.delay }, 'Job scheduled with delay');
     } else {
+      this.emit('added', job);
+      log.info({ jobId, type, priority: job.priority }, 'Job added to queue');
       this._enqueue(jobId);
     }
-
-    this.emit('added', job);
-    log.info({ jobId, type, priority: job.priority }, 'Job added to queue');
 
     return jobId;
   }

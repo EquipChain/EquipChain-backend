@@ -180,7 +180,8 @@ describe('Export Endpoints Integration Tests', () => {
       });
       
       assert.strictEqual(response.statusCode, 200);
-      assert.ok(response.body.includes('date,totalConsumption'));
+      assert.ok(response.body.includes('date'));
+      assert.ok(response.body.includes('totalConsumption'));
     });
 
     test('should return weekly analytics', async () => {

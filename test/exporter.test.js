@@ -234,7 +234,7 @@ describe('Exporter Service', () => {
         chunks += chunk.toString();
       });
       
-      jsonStream.on('end', => {
+      jsonStream.on('end', () => {
         const lines = chunks.trim().split('\n');
         assert.strictEqual(lines.length, 2);
         assert.strictEqual(JSON.parse(lines[0]).id, '1');

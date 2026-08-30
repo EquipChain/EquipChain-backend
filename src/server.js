@@ -1,5 +1,6 @@
 require('./config/tracing');
-const http = require('http');
+const { createServer } = require('http');
+const { Server } = require('socket.io');
 const { childLogger } = require('./config/logger');
 const config = require('./config');
 const app = require('./app');
@@ -8,18 +9,23 @@ const { initServices, shutdownServices } = require('./services');
 const log = childLogger('server');
 
 let server;
-let isShuttingDown = false;
+let io;
 
-/**
- * Start the HTTP server
- */
 async function startServer() {
   try {
     // Initialize services
     await initServices(app);
 
-    // Create HTTP server
-    server = http.createServer(app);
+    // Create HTTP server with socket.io
+    server = createServer(app);
+    io = new Server(server, {
+      cors: {
+        origin: '*',
+      },
+    });
+
+    // Make the socket.io server available to services
+    app.set('io', io);
 
     // Start listening
     server.listen(config.port, () => {

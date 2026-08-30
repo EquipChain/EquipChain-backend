@@ -2,7 +2,11 @@
 const express = require('express');
 const { userStore } = require('../../data/adminStore');
 const { validate } = require('../../middleware/validate');
-const { createUserSchema, updateUserRolesSchema } = require('../../schemas/admin.schema');
+const {
+  adminCreateUserSchema,
+  adminUpdateUserRolesSchema,
+  adminIdParamSchema,
+} = require('../../schemas/validation.schema');
 const { paginate } = require('../../lib/pagination');
 
 const router = express.Router();
@@ -46,7 +50,7 @@ router.get('/', (req, res) => {
  *       200: { description: User details }
  *       404: { description: User not found }
  */
-router.get('/:id', (req, res) => {
+router.get('/:id', validate(adminIdParamSchema), (req, res) => {
   const user = userStore.get(req.params.id);
   if (!user) return res.status(404).json({ error: 'User not found' });
   res.json(user);
@@ -76,7 +80,7 @@ router.get('/:id', (req, res) => {
  *       201: { description: Created user }
  *       400: { description: Validation failed }
  */
-router.post('/', validate(createUserSchema), (req, res) => {
+router.post('/', validate(adminCreateUserSchema), (req, res) => {
   res.status(201).json(userStore.create(req.body));
 });
 
@@ -97,7 +101,7 @@ router.post('/', validate(createUserSchema), (req, res) => {
  *       400: { description: Validation failed }
  *       404: { description: User not found }
  */
-router.patch('/:id', validate(updateUserRolesSchema), (req, res) => {
+router.patch('/:id', validate({ ...adminUpdateUserRolesSchema, params: adminIdParamSchema.params }), (req, res) => {
   const user = userStore.updateRoles(req.params.id, req.body.roles);
   if (!user) return res.status(404).json({ error: 'User not found' });
   res.json(user);
@@ -119,7 +123,7 @@ router.patch('/:id', validate(updateUserRolesSchema), (req, res) => {
  *       200: { description: Deactivated user }
  *       404: { description: User not found }
  */
-router.delete('/:id', (req, res) => {
+router.delete('/:id', validate(adminIdParamSchema), (req, res) => {
   const user = userStore.deactivate(req.params.id);
   if (!user) return res.status(404).json({ error: 'User not found' });
   res.json(user);

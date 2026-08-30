@@ -1,11 +1,13 @@
 const { childLogger } = require('../config/logger');
 const { queue, Priority } = require('./queue');
 const { scheduler } = require('./scheduler');
+const { cacheService } = require('./cache');
 const billingHandler = require('../jobs/billing.job');
 const reportsHandler = require('../jobs/reports.job');
 const syncHandler = require('../jobs/sync.job');
 const webhookRetryHandler = require('../jobs/webhookRetry.job');
 const cacheWarmHandler = require('../jobs/cacheWarm.job');
+const websocketHandler = require('./websocket');
 
 const log = childLogger('services');
 
@@ -26,9 +28,10 @@ async function initServices(app) {
   try {
     log.info('Initializing services...');
 
-    // Initialize cache service (if implemented)
-    // services.cache = await initCache();
-    // log.info('Cache service initialized');
+    // Initialize cache service
+    await cacheService.connect();
+    services.cache = cacheService;
+    log.info('Cache service initialized');
 
     // Initialize queue service
     await initQueue();
@@ -43,8 +46,9 @@ async function initServices(app) {
     // log.info('Event listener initialized');
 
     // Initialize WebSocket (if implemented)
-    // services.websocket = await initWebSocket(app);
-    // log.info('WebSocket initialized');
+    const io = app.get('io');
+    services.websocket = io ? websocketHandler.initWebSocket(io) : null;
+    log.info('WebSocket initialized');
 
     log.info('All services initialized successfully');
   } catch (error) {

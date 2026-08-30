@@ -1,37 +1,31 @@
-/**
- * MeterReadingRepository — Reading Data Points Store
- *
- * Manages meter reading data points. This repository is designed to be used
- * by the analytics aggregation service for computing daily, monthly, and
- * custom-range summaries.
- *
- * Domain-specific methods:
- *   - findByMeterId(meterId, dateRange)
- *   - findByDateRange(startDate, endDate)
- *   - getReadings(filters) — flexible filtering for the aggregator
- *   - addReadings(data) — batch insert with data generation
- *   - clearReadings() — clear all readings (for testing)
- *   - readingCount() — get total count
- */
+import { BaseRepository, BaseEntity, QueryParams } from './BaseRepository';
 
-const BaseRepository = require('./BaseRepository');
+export interface MeterReadingEntity extends BaseEntity {
+  meterId: string;
+  timestamp: number;
+  value: number;
+  unit: string;
+}
 
-class MeterReadingRepository extends BaseRepository {
+export interface DateRange {
+  startDate?: string | number;
+  endDate?: string | number;
+}
+
+export interface ReadingFilters extends DateRange {
+  meterIds?: string[];
+}
+
+export class MeterReadingRepository extends BaseRepository<MeterReadingEntity> {
   constructor() {
     super({ entityName: 'meterReading' });
     this._allowedFilters = ['meterId'];
     this._sortableFields = ['meterId', 'timestamp', 'value', 'createdAt'];
     this._searchableFields = ['meterId'];
-    this._defaultSort = { field: 'timestamp', order: 'desc' };
+    this._defaultSort = { field: 'timestamp', order: 'desc' as const };
   }
 
-  /**
-   * Find readings by meter ID within an optional date range.
-   * @param {string} meterId
-   * @param {{ startDate?: string|number, endDate?: string|number }} [dateRange]
-   * @returns {Promise<Array>}
-   */
-  async findByMeterId(meterId, dateRange = {}) {
+  async findByMeterId(meterId: string, dateRange: DateRange = {}): Promise<MeterReadingEntity[]> {
     let results = [...this._store.values()].filter((r) => r.meterId === meterId);
 
     if (dateRange.startDate) {
@@ -50,13 +44,7 @@ class MeterReadingRepository extends BaseRepository {
     return results.map((r) => ({ ...r }));
   }
 
-  /**
-   * Find all readings within a date range.
-   * @param {string|number} startDate
-   * @param {string|number} endDate
-   * @returns {Promise<Array>}
-   */
-  async findByDateRange(startDate, endDate) {
+  async findByDateRange(startDate: string | number, endDate: string | number): Promise<MeterReadingEntity[]> {
     const start = typeof startDate === 'number' ? startDate : new Date(startDate).getTime();
     const endOfDay = new Date(endDate);
     endOfDay.setUTCHours(23, 59, 59, 999);
@@ -67,16 +55,11 @@ class MeterReadingRepository extends BaseRepository {
       .map((r) => ({ ...r }));
   }
 
-  /**
-   * Get readings with flexible filtering (compatible with aggregator API).
-   * @param {{ meterIds?: string[], startDate?: string|number, endDate?: string|number }} [filters]
-   * @returns {Promise<Array>}
-   */
-  async getReadings(filters = {}) {
+  async getReadings(filters: ReadingFilters = {}): Promise<MeterReadingEntity[]> {
     let result = [...this._store.values()];
 
     if (filters.meterIds && filters.meterIds.length > 0) {
-      result = result.filter((r) => filters.meterIds.includes(r.meterId));
+      result = result.filter((r) => filters.meterIds!.includes(r.meterId));
     }
 
     if (filters.startDate) {
@@ -95,14 +78,9 @@ class MeterReadingRepository extends BaseRepository {
     return result.map((r) => ({ ...r }));
   }
 
-  /**
-   * Add multiple readings at once (batch insert).
-   * @param {Array|Object} data
-   * @returns {Promise<Array|Object>}
-   */
-  async addReadings(data) {
+  async addReadings(data: any | any[]): Promise<any | any[]> {
     const items = Array.isArray(data) ? data : [data];
-    const stored = [];
+    const stored: MeterReadingEntity[] = [];
     for (const item of items) {
       const reading = await this.create({
         meterId: item.meterId,
@@ -115,20 +93,13 @@ class MeterReadingRepository extends BaseRepository {
     return stored.length === 1 ? stored[0] : stored;
   }
 
-  /**
-   * Clear all readings.
-   */
-  async clearReadings() {
+  async clearReadings(): Promise<void> {
     await this.clear();
   }
 
-  /**
-   * Get the total count of readings.
-   * @returns {Promise<number>}
-   */
-  async readingCount() {
+  async readingCount(): Promise<number> {
     return this._store.size;
   }
 }
 
-module.exports = MeterReadingRepository;
+export const meterReadingRepository = new MeterReadingRepository();

@@ -1,18 +1,19 @@
-/**
- * DeviceRepository — Registered Meters/Devices Store
- *
- * Manages registered utility meter devices. Pre-seeds 3 sample meters.
- *
- * Domain-specific methods:
- *   - findByMeterId(meterId)
- *   - findByStatus(status)
- *   - findOnline()
- *   - findOffline()
- */
+import { BaseRepository, BaseEntity } from './BaseRepository';
 
-const BaseRepository = require('./BaseRepository');
+export interface DeviceEntity extends BaseEntity {
+  meterId: string;
+  name: string;
+  type: string;
+  location: string;
+  status: string;
+  lastReading: any | null;
+  config: {
+    baseLoad: number;
+    interval: number;
+  };
+}
 
-const DEFAULT_DEVICES = [
+const DEFAULT_DEVICES: Omit<DeviceEntity, 'id' | 'createdAt' | 'updatedAt'>[] = [
   {
     meterId: 'METER-001',
     name: 'Main Building',
@@ -42,25 +43,22 @@ const DEFAULT_DEVICES = [
   },
 ];
 
-class DeviceRepository extends BaseRepository {
+export class DeviceRepository extends BaseRepository<DeviceEntity> {
   constructor() {
     super({ entityName: 'device' });
     this._allowedFilters = ['type', 'status', 'location'];
     this._sortableFields = ['meterId', 'name', 'type', 'status', 'createdAt'];
     this._searchableFields = ['name', 'meterId', 'location'];
-    this._defaultSort = { field: 'meterId', order: 'asc' };
+    this._defaultSort = { field: 'meterId', order: 'asc' as const };
 
     this._seedDefaults();
   }
 
-  /**
-   * Pre-seed default devices.
-   */
-  _seedDefaults() {
+  private _seedDefaults(): void {
     if (this._store.size === 0) {
       const now = new Date().toISOString();
       for (const device of DEFAULT_DEVICES) {
-        const entity = {
+        const entity: DeviceEntity = {
           id: this._generateId(),
           ...device,
           createdAt: now,
@@ -71,12 +69,7 @@ class DeviceRepository extends BaseRepository {
     }
   }
 
-  /**
-   * Find a device by its meterId.
-   * @param {string} meterId
-   * @returns {Promise<Object|null>}
-   */
-  async findByMeterId(meterId) {
+  async findByMeterId(meterId: string): Promise<DeviceEntity | null> {
     for (const device of this._store.values()) {
       if (device.meterId === meterId) {
         return { ...device };
@@ -85,32 +78,19 @@ class DeviceRepository extends BaseRepository {
     return null;
   }
 
-  /**
-   * Find all devices with a given status.
-   * @param {'online'|'offline'|'maintenance'} status
-   * @returns {Promise<Array>}
-   */
-  async findByStatus(status) {
+  async findByStatus(status: string): Promise<DeviceEntity[]> {
     return [...this._store.values()]
       .filter((d) => d.status === status)
       .map((d) => ({ ...d }));
   }
 
-  /**
-   * Find all online devices.
-   * @returns {Promise<Array>}
-   */
-  async findOnline() {
+  async findOnline(): Promise<DeviceEntity[]> {
     return this.findByStatus('online');
   }
 
-  /**
-   * Find all offline devices.
-   * @returns {Promise<Array>}
-   */
-  async findOffline() {
+  async findOffline(): Promise<DeviceEntity[]> {
     return this.findByStatus('offline');
   }
 }
 
-module.exports = DeviceRepository;
+export const deviceRepository = new DeviceRepository();

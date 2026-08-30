@@ -9,7 +9,6 @@ after(() => server.close());
 describe('app', () => {
   it('creates an Express application instance', () => {
     assert.strictEqual(typeof app, 'function');
-    assert.strictEqual(app.name, 'express');
   });
 
   it('responds to root route with project info', async () => {

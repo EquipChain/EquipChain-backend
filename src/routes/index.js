@@ -7,14 +7,25 @@ const { services } = require('../services');
 // const adminRoutes = require('./admin');
 // const analyticsRoutes = require('./analytics');
 const exportRoutes = require('./exports');
+const docsRoutes = require('./docs');
 
 // Mount routes under their respective prefixes
 // router.use('/api/auth', authRoutes);
 // router.use('/api/admin', adminRoutes);
 // router.use('/api/analytics', analyticsRoutes);
 router.use('/api/exports', exportRoutes);
+router.use('/api', docsRoutes);
 
 // Health check route
+/**
+ * @openapi
+ * /health:
+ *   get:
+ *     summary: Service health check
+ *     tags: [System]
+ *     responses:
+ *       200: { description: Service health status }
+ */
 router.get('/health', (req, res) => {
   const healthData = {
     status: 'ok',

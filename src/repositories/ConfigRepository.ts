@@ -1,45 +1,34 @@
-/**
- * ConfigRepository — Protocol Configuration Store
- *
- * Manages system-wide configuration key-value pairs. Pre-seeds default values.
- *
- * Domain-specific methods:
- *   - get(key)
- *   - set(key, value)
- *   - getByGroup(group)
- *   - getAll()
- */
+import { BaseRepository, BaseEntity } from './BaseRepository';
 
-const BaseRepository = require('./BaseRepository');
+export interface ConfigEntity extends BaseEntity {
+  key: string;
+  value: string;
+  group: string;
+  description: string;
+}
 
-const DEFAULT_CONFIG = {
+const DEFAULT_CONFIG: Record<string, string> = {
   'app.name': 'EquipChain API',
   'app.version': '1.0.0',
   'app.description': 'Utility meter monitoring and data access platform',
-
   'meters.defaultInterval': '3600',
-  'meters.maxReadingAge': '7776000', // 90 days in seconds
+  'meters.maxReadingAge': '7776000',
   'meters.dataRetentionDays': '365',
-
   'analytics.defaultAggregation': 'avg',
   'analytics.cacheTTL': '3600',
-
   'auth.tokenExpiry': '3600',
   'auth.maxLoginAttempts': '5',
   'auth.lockoutDuration': '900',
-
-  'rateLimit.window': '900000', // 15 min in ms
+  'rateLimit.window': '900000',
   'rateLimit.max': '100',
-
   'webhook.maxRetries': '3',
   'webhook.retryDelay': '5000',
   'webhook.timeout': '10000',
-
   'monitoring.logLevel': 'info',
   'monitoring.otelEnabled': 'true',
 };
 
-class ConfigRepository extends BaseRepository {
+export class ConfigRepository extends BaseRepository<ConfigEntity> {
   constructor() {
     super({ entityName: 'config' });
     this._allowedFilters = ['group'];
@@ -49,15 +38,12 @@ class ConfigRepository extends BaseRepository {
     this._seedDefaults();
   }
 
-  /**
-   * Pre-seed default configuration values.
-   */
-  _seedDefaults() {
+  private _seedDefaults(): void {
     if (this._store.size === 0) {
       const now = new Date().toISOString();
       for (const [key, value] of Object.entries(DEFAULT_CONFIG)) {
         const group = key.split('.')[0];
-        const entity = {
+        const entity: ConfigEntity = {
           id: this._generateId(),
           key,
           value,
@@ -71,12 +57,7 @@ class ConfigRepository extends BaseRepository {
     }
   }
 
-  /**
-   * Get a configuration value by key.
-   * @param {string} key
-   * @returns {Promise<string|null>}
-   */
-  async get(key) {
+  async get(key: string): Promise<string | null> {
     for (const config of this._store.values()) {
       if (config.key === key) {
         return config.value;
@@ -85,43 +66,26 @@ class ConfigRepository extends BaseRepository {
     return null;
   }
 
-  /**
-   * Set a configuration value by key (creates or updates).
-   * @param {string} key
-   * @param {string} value
-   * @returns {Promise<Object>}
-   */
-  async set(key, value) {
-    // Check if key exists
+  async set(key: string, value: string): Promise<ConfigEntity> {
     for (const config of this._store.values()) {
       if (config.key === key) {
-        return this.update(config.id, { value });
+        return this.update(config.id, { value } as Partial<ConfigEntity>) as Promise<ConfigEntity>;
       }
     }
 
-    // Create new config entry
     const group = key.split('.')[0];
-    return this.create({ key, value, group });
+    return this.create({ key, value, group } as any);
   }
 
-  /**
-   * Get all configuration values for a group.
-   * @param {string} group
-   * @returns {Promise<Array>}
-   */
-  async getByGroup(group) {
+  async getByGroup(group: string): Promise<Array<{ key: string; value: string }>> {
     return [...this._store.values()]
       .filter((c) => c.group === group)
       .map((c) => ({ key: c.key, value: c.value }))
       .sort((a, b) => a.key.localeCompare(b.key));
   }
 
-  /**
-   * Get all configuration values as a flat key-value map.
-   * @returns {Promise<Object>}
-   */
-  async getAll() {
-    const result = {};
+  async getAllConfig(): Promise<Record<string, string>> {
+    const result: Record<string, string> = {};
     for (const config of this._store.values()) {
       result[config.key] = config.value;
     }
@@ -129,4 +93,4 @@ class ConfigRepository extends BaseRepository {
   }
 }
 
-module.exports = ConfigRepository;
+export const configRepository = new ConfigRepository();

@@ -1,33 +1,28 @@
-/**
- * UserRepository — Admin User Store
- *
- * Manages admin user accounts. Pre-seeds a default admin user on instantiation.
- *
- * Domain-specific methods:
- *   - findByEmail(email)
- *   - findByPublicKey(publicKey)
- */
+import { BaseRepository, BaseEntity, QueryParams } from './BaseRepository';
 
-const BaseRepository = require('./BaseRepository');
+export interface UserEntity extends BaseEntity {
+  email: string;
+  name: string;
+  role: string;
+  status: string;
+  publicKey: string;
+}
 
-class UserRepository extends BaseRepository {
+export class UserRepository extends BaseRepository<UserEntity> {
   constructor() {
     super({ entityName: 'user' });
     this._allowedFilters = ['role', 'status'];
     this._sortableFields = ['email', 'role', 'createdAt', 'updatedAt'];
     this._searchableFields = ['email', 'name'];
-    this._defaultSort = { field: 'createdAt', order: 'desc' };
+    this._defaultSort = { field: 'createdAt', order: 'desc' as const };
 
     this._seedDefaults();
   }
 
-  /**
-   * Pre-seed a default admin user.
-   */
-  _seedDefaults() {
+  private _seedDefaults(): void {
     if (this._store.size === 0) {
       const now = new Date().toISOString();
-      const admin = {
+      const admin: UserEntity = {
         id: this._generateId(),
         email: 'admin@equipchain.io',
         name: 'EquipChain Admin',
@@ -41,12 +36,7 @@ class UserRepository extends BaseRepository {
     }
   }
 
-  /**
-   * Find a user by their email address.
-   * @param {string} email
-   * @returns {Promise<Object|null>}
-   */
-  async findByEmail(email) {
+  async findByEmail(email: string): Promise<UserEntity | null> {
     for (const user of this._store.values()) {
       if (user.email === email) {
         return { ...user };
@@ -55,12 +45,7 @@ class UserRepository extends BaseRepository {
     return null;
   }
 
-  /**
-   * Find a user by their Stellar public key.
-   * @param {string} publicKey
-   * @returns {Promise<Object|null>}
-   */
-  async findByPublicKey(publicKey) {
+  async findByPublicKey(publicKey: string): Promise<UserEntity | null> {
     for (const user of this._store.values()) {
       if (user.publicKey === publicKey) {
         return { ...user };
@@ -70,4 +55,4 @@ class UserRepository extends BaseRepository {
   }
 }
 
-module.exports = UserRepository;
+export const userRepository = new UserRepository();

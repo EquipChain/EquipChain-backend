@@ -47,7 +47,7 @@ EquipChain is a blockchain-powered platform for monitoring, managing, and analyz
 
 ### Project Status
 
-**Current Phase:** MVP — Core meter monitoring endpoints are operational. The API serves project metadata and on-chain contract data, and provides dashboard analytics aggregation. Future releases will add full CRUD for meters, WebSocket event streaming, and admin management.
+**Current Phase:** MVP — Core meter monitoring endpoints are operational. The API serves project metadata and on-chain contract data, and provides dashboard analytics aggregation. WebSocket event streaming for live meter readings is implemented. Future releases will add full CRUD for meters and admin management.
 
 ---
 
@@ -292,17 +292,18 @@ All export endpoints use streaming to handle large datasets efficiently:
 | `GET` | `/webhooks` | List registered webhooks | Yes |
 | `DELETE` | `/webhooks/:id` | Remove a webhook | Admin |
 
-### WebSocket (Planned)
+### API Documentation (Implemented)
 
-| Event | Direction | Description |
-|-------|-----------|-------------|
-| `meter:reading` | Server → Client | Real-time meter reading update |
-| `meter:alert` | Server → Client | Meter anomaly or alert notification |
-| `meter:status` | Server → Client | Meter online/offline status change |
-| `subscribe:meters` | Client → Server | Subscribe to specific meter IDs |
-| `unsubscribe:meters` | Client → Server | Unsubscribe from specific meter IDs |
+The API is documented with OpenAPI 3 and served interactively via Swagger UI.
 
-Connect to `ws://localhost:3000/ws`.
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/openapi.json` | Raw OpenAPI 3 specification (generated from `@openapi` JSDoc annotations) |
+| `GET /api/docs` | Interactive Swagger UI for browsing and testing the API |
+
+The specification covers all API endpoints (system, admin, analytics, exports) and the
+security scheme (`bearerAuth`). Annotations live alongside the route handlers in `src/`,
+so the docs stay in sync with the code.
 
 ### Example Responses
 

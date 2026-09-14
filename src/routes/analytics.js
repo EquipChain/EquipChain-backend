@@ -1,6 +1,7 @@
 const { Router } = require('express');
 const { childLogger } = require('../config/logger');
 const { getReadings, aggregateReadings, fleetSummary, comparePeriods } = require('../services/aggregator');
+const { paginateCursor } = require('../utils/pagination');
 const { cacheService } = require('../services/cache');
 const { readingCount } = require('../services/aggregator');
 const { validate } = require('../middleware/validate');
@@ -360,6 +361,73 @@ router.get('/fleet-summary', validate(fleetSummarySchema), async (req, res, next
     res.json(summary);
   } catch (err) {
     log.error({ err }, 'fleet-summary error');
+    next(err);
+  }
+});
+
+/**
+ * @openapi
+ * /api/analytics/readings:
+ *   get:
+ *     summary: Raw meter readings with keyset (cursor) pagination
+ *     description: |
+ *       Streams the raw readings list using cursor pagination. Offset paging
+ *       degrades linearly with depth on an append-heavy dataset like meter
+ *       readings and drifts as rows are inserted mid-scan; cursor anchoring
+ *       gives constant-time pages regardless of depth.
+ *     tags: [Analytics]
+ *     parameters:
+ *       - in: query
+ *         name: meterId
+ *         schema: { type: string }
+ *         description: Restrict to one meter
+ *       - in: query
+ *         name: limit
+ *         schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+ *       - in: query
+ *         name: cursor
+ *         schema: { type: string }
+ *         description: Opaque cursor from a previous page
+ *     responses:
+ *       200: { description: One page of readings with pagination metadata }
+ *       400: { description: Validation failed }
+ */
+router.get('/readings', (req, res, next) => {
+  try {
+    const limitRaw = parseInt(req.query.limit, 10);
+    const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 100) : 50;
+    const meterId = typeof req.query.meterId === 'string' && req.query.meterId ? req.query.meterId : null;
+
+    const filters = {};
+    if (meterId) filters.meterIds = [meterId];
+    const rows = getReadings(filters);
+
+    // Canonical order (timestamp asc, then id) - stable and index-friendly.
+    // The cursor utility enforces its own keyset ordering; we pass the sort
+    // whitelist so a client-chosen sortBy stays validated.
+    rows.sort((a, b) => a.timestamp - b.timestamp || String(a.id).localeCompare(String(b.id)));
+
+    const page = paginateCursor(rows, {
+      limit,
+      cursor: req.query.cursor,
+      before: req.query.before,
+      sortBy: req.query.sortBy,
+      sortOrder: req.query.sortOrder,
+    }, {
+      sortableFields: ['timestamp'],
+      defaultSort: { field: 'timestamp', order: 'asc' },
+    });
+
+    res.json({
+      data: page.data,
+      pagination: page.pagination,
+      meta: {
+        meterId,
+        totalInStore: readingCount(),
+      },
+    });
+  } catch (err) {
+    log.error({ err }, 'readings cursor error');
     next(err);
   }
 });

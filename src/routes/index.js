@@ -144,6 +144,16 @@ router.get('/health/ready', async (req, res) => {
   const checks = {};
   let ready = true;
 
+  // Draining? A shutdown signal has flipped this app flag first thing, so
+  // the LB removes this instance from rotation before the drain begins.
+  if (req.app.get('shuttingDown')) {
+    return res.status(503).json({
+      status: 'not_ready',
+      checks: { draining: true },
+      timestamp: new Date().toISOString(),
+    });
+  }
+
   // Services initialized?
   checks.servicesInitialized = Boolean(services.scheduler || services.queue);
   if (!checks.servicesInitialized) ready = false;

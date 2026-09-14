@@ -123,6 +123,11 @@ async function gracefulShutdown(signal) {
   log.info({ signal }, 'Received shutdown signal, starting graceful shutdown');
   armForceExit(config.shutdownTimeoutMs);
 
+  // Flip readiness IMMEDIATELY so load balancers stop routing new traffic
+  // here while the drain proceeds. /health/ready answers 503 from now on;
+  // liveness stays 200 so orchestrators do not kill us mid-drain.
+  app.set('shuttingDown', true);
+
   // 1. Stop accepting new connections
   if (server) {
     await new Promise((resolve) => {

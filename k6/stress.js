@@ -5,6 +5,11 @@
  * Scenarios: Ramp up from 10 → 50 → 100 → 200 → 500 VUs in stages.
  * Thresholds: p95 < 5000 ms, error rate < 5 % (relaxed for high load).
  *
+ * Auth note: the protected-route branch uses a setup-minted token;
+ * /api/auth/challenge is intentionally NOT hit per iteration because of its
+ * 5/min brute-force guard - under stress every attempt would 429 and the
+ * results would measure the guard, not the API.
+ *
  * Run: k6 run k6/stress.js
  *       k6 run k6/stress.js -e BASE_URL=https://staging.example.com
  */
@@ -30,7 +35,20 @@ export const options = {
   summaryTrendStats: ['avg', 'min', 'med', 'max', 'p(50)', 'p(75)', 'p(90)', 'p(95)', 'p(99)'],
 };
 
-export default function () {
+export function setup() {
+  const authResp = http.post(
+    `${BASE_URL}/api/auth/challenge`,
+    JSON.stringify({ wallet: randomWallet() }),
+    { headers: DEFAULT_HEADERS },
+  );
+  const token = authResp.json('token');
+  if (!token) {
+    throw new Error(`setup: could not mint token (status ${authResp.status})`);
+  }
+  return { token };
+}
+
+export default function (data) {
   // Mix of endpoints to simulate realistic traffic
   const choice = Math.random();
 
@@ -46,34 +64,14 @@ export default function () {
     check(resp, {
       'stress-health: status is 200': (r) => r.status === 200,
     });
-  } else if (choice < 0.9) {
-    // POST /api/auth/challenge
-    const wallet = randomWallet();
-    const resp = http.post(
-      `${BASE_URL}/api/auth/challenge`,
-      JSON.stringify({ wallet }),
-      { headers: DEFAULT_HEADERS },
-    );
-    check(resp, {
-      'stress-auth: status is 200': (r) => r.status === 200,
-    });
   } else {
-    // GET /api/protected (with token)
-    const wallet = randomWallet();
-    const authResp = http.post(
-      `${BASE_URL}/api/auth/challenge`,
-      JSON.stringify({ wallet }),
-      { headers: DEFAULT_HEADERS },
-    );
-    const token = authResp.json('token');
-    if (token) {
-      const resp = http.get(`${BASE_URL}/api/protected`, {
-        headers: { ...DEFAULT_HEADERS, Authorization: `Bearer ${token}` },
-      });
-      check(resp, {
-        'stress-protected: status is 200': (r) => r.status === 200,
-      });
-    }
+    // GET /api/protected (setup-minted token)
+    const resp = http.get(`${BASE_URL}/api/protected`, {
+      headers: { ...DEFAULT_HEADERS, Authorization: `Bearer ${data.token}` },
+    });
+    check(resp, {
+      'stress-protected: status is 200': (r) => r.status === 200,
+    });
   }
 
   sleep(0.5);

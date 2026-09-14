@@ -6,6 +6,11 @@
  * Duration: 30 seconds.
  * Thresholds: All requests succeed, p95 < 1000 ms.
  *
+ * The auth challenge is exercised ONCE in setup() and the minted token is
+ * reused across iterations: the endpoint now carries a 5/min brute-force
+ * guard (by design), so per-iteration minting would throttle any run longer
+ * than a few seconds and turn a smoke test into a 429 generator.
+ *
  * Run: k6 run k6/smoke.js
  *       k6 run k6/smoke.js -e BASE_URL=https://staging.example.com
  */
@@ -28,7 +33,23 @@ export const options = {
   summaryTrendStats: ['avg', 'min', 'med', 'max', 'p(50)', 'p(75)', 'p(90)', 'p(95)', 'p(99)'],
 };
 
-export default function () {
+// Mint one token per run (not per iteration) - see header note.
+export function setup() {
+  const authResp = http.post(
+    `${BASE_URL}/api/auth/challenge`,
+    JSON.stringify({ wallet: randomWallet() }),
+    { headers: DEFAULT_HEADERS },
+  );
+  const token = authResp.json('token');
+  if (!token) {
+    throw new Error(`setup: could not mint token (status ${authResp.status})`);
+  }
+  return { token };
+}
+
+export default function (data) {
+  const token = data.token;
+
   // 1. GET / – Project metadata
   const homeResp = http.get(`${BASE_URL}/`, {
     headers: DEFAULT_HEADERS,
@@ -49,21 +70,7 @@ export default function () {
     'health: has uptime field': (r) => r.json('uptime') !== undefined,
   });
 
-  // 3. POST /api/auth/challenge – Auth challenge
-  const wallet = randomWallet();
-  const authResp = http.post(
-    `${BASE_URL}/api/auth/challenge`,
-    JSON.stringify({ wallet }),
-    { headers: DEFAULT_HEADERS },
-  );
-  const token = authResp.json('token');
-  check(authResp, {
-    'auth: status is 200': (r) => r.status === 200,
-    'auth: token is returned': (r) => token !== undefined,
-    'auth: token is non-empty': (r) => typeof token === 'string' && token.length > 0,
-  });
-
-  // 4. GET /api/protected – Protected route (using token from auth challenge)
+  // 3. GET /api/protected – Protected route (setup-minted token)
   const protectedHeaders = {
     ...DEFAULT_HEADERS,
     Authorization: `Bearer ${token}`,
@@ -76,7 +83,7 @@ export default function () {
     'protected: returns data': (r) => r.json('data') === 'Sensitive meter data',
   });
 
-  // 5. GET /api/protected – Without token (expected 401)
+  // 4. GET /api/protected – Without token (expected 401)
   const unauthorizedResp = http.get(`${BASE_URL}/api/protected`, {
     headers: DEFAULT_HEADERS,
   });

@@ -5,6 +5,10 @@
  * Scenarios: 50 VUs sustained for 30+ minutes.
  * Thresholds: p95 < 2000 ms, error rate < 1 %.
  *
+ * Auth note: the authenticated branches reuse a setup-minted token;
+ * /api/auth/challenge is deliberately not hit per iteration (5/min
+ * brute-force guard - a 30-minute soak would otherwise be mostly 429s).
+ *
  * Run: k6 run k6/soak.js
  *       k6 run k6/soak.js -e BASE_URL=https://staging.example.com
  *       k6 run k6/soak.js -e DURATION=60m -e VUS=100
@@ -29,7 +33,20 @@ export const options = {
   summaryTrendStats: ['avg', 'min', 'med', 'max', 'p(50)', 'p(75)', 'p(90)', 'p(95)', 'p(99)'],
 };
 
-export default function () {
+export function setup() {
+  const authResp = http.post(
+    `${BASE_URL}/api/auth/challenge`,
+    JSON.stringify({ wallet: randomWallet() }),
+    { headers: DEFAULT_HEADERS },
+  );
+  const token = authResp.json('token');
+  if (!token) {
+    throw new Error(`setup: could not mint token (status ${authResp.status})`);
+  }
+  return { token };
+}
+
+export default function (data) {
   // Realistic user behaviour: mix of operations with think time
   const choice = Math.random();
 
@@ -46,33 +63,19 @@ export default function () {
       'soak-health: status is 200': (r) => r.status === 200,
     });
   } else if (choice < 0.75) {
-    // POST /api/auth/challenge
-    const wallet = randomWallet();
-    const resp = http.post(
-      `${BASE_URL}/api/auth/challenge`,
-      JSON.stringify({ wallet }),
-      { headers: DEFAULT_HEADERS },
-    );
+    // GET /api/protected (setup-minted token)
+    const resp = http.get(`${BASE_URL}/api/protected`, {
+      headers: { ...DEFAULT_HEADERS, Authorization: `Bearer ${data.token}` },
+    });
     check(resp, {
-      'soak-auth: status is 200': (r) => r.status === 200,
+      'soak-protected: status is 200': (r) => r.status === 200,
     });
   } else if (choice < 0.9) {
-    // GET /api/protected (with token)
-    const wallet = randomWallet();
-    const authResp = http.post(
-      `${BASE_URL}/api/auth/challenge`,
-      JSON.stringify({ wallet }),
-      { headers: DEFAULT_HEADERS },
-    );
-    const token = authResp.json('token');
-    if (token) {
-      const resp = http.get(`${BASE_URL}/api/protected`, {
-        headers: { ...DEFAULT_HEADERS, Authorization: `Bearer ${token}` },
-      });
-      check(resp, {
-        'soak-protected: status is 200': (r) => r.status === 200,
-      });
-    }
+    // GET /api/metrics (process + business gauges)
+    const resp = http.get(`${BASE_URL}/metrics`);
+    check(resp, {
+      'soak-metrics: status is 200': (r) => r.status === 200,
+    });
   } else {
     // Unauthorized access (401 expected)
     const resp = http.get(`${BASE_URL}/api/protected`, {

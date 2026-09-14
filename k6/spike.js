@@ -5,6 +5,10 @@
  * Scenarios: Sudden jump from 0 → 200 VUs, sustain for 1 min, then immediate drop.
  * Thresholds: p99 < 3000 ms, error rate < 2 %.
  *
+ * Auth note: the protected-route check uses a setup-minted token;
+ * /api/auth/challenge is deliberately not hit per iteration (5/min
+ * brute-force guard would turn the spike into a 429 showcase).
+ *
  * Run: k6 run k6/spike.js
  *       k6 run k6/spike.js -e BASE_URL=https://staging.example.com
  */
@@ -27,7 +31,20 @@ export const options = {
   summaryTrendStats: ['avg', 'min', 'med', 'max', 'p(50)', 'p(75)', 'p(90)', 'p(95)', 'p(99)'],
 };
 
-export default function () {
+export function setup() {
+  const authResp = http.post(
+    `${BASE_URL}/api/auth/challenge`,
+    JSON.stringify({ wallet: randomWallet() }),
+    { headers: DEFAULT_HEADERS },
+  );
+  const token = authResp.json('token');
+  if (!token) {
+    throw new Error(`setup: could not mint token (status ${authResp.status})`);
+  }
+  return { token };
+}
+
+export default function (data) {
   // Primarily read operations (GET) during spike
   const resp = http.get(`${BASE_URL}/`, {
     headers: DEFAULT_HEADERS,
@@ -48,16 +65,13 @@ export default function () {
     });
   }
 
-  // Every 10th request also hits the auth endpoint
+  // Every 10th request exercises an authenticated read with the minted token
   if (__ITER % 10 === 0) {
-    const wallet = randomWallet();
-    const authResp = http.post(
-      `${BASE_URL}/api/auth/challenge`,
-      JSON.stringify({ wallet }),
-      { headers: DEFAULT_HEADERS },
-    );
-    check(authResp, {
-      'spike-auth: status is 200': (r) => r.status === 200,
+    const protectedResp = http.get(`${BASE_URL}/api/protected`, {
+      headers: { ...DEFAULT_HEADERS, Authorization: `Bearer ${data.token}` },
+    });
+    check(protectedResp, {
+      'spike-protected: status is 200': (r) => r.status === 200,
     });
   }
 

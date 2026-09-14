@@ -2,6 +2,7 @@ const { Router } = require('express');
 const { childLogger } = require('../config/logger');
 const { getReadings, aggregateReadings, fleetSummary, comparePeriods } = require('../services/aggregator');
 const { cacheService } = require('../services/cache');
+const { readingCount } = require('../services/aggregator');
 const { validate } = require('../middleware/validate');
 const {
   dailySummarySchema,
@@ -65,14 +66,34 @@ function getPreviousPeriodDates(startDate, endDate, compareWith) {
 
 /**
  * Build and send aggregated response with optional period comparison.
+ * Aggregation results for full-day windows are cached (cache-aside, keyed on
+ * the full query shape) because aggregations scan the entire readings store -
+ * a dashboard polling every 5s would otherwise rescan tens of thousands of
+ * readings per request. Cached entries are stamped with the store size when
+ * written; a mismatch means readings arrived after the cache was written, so
+ * the entry is stale by definition and recomputed. That gives correctness
+ * (never serves aggregations missing fresh data) without any invalidation
+ * wiring on ingest.
  */
-function sendAggregatedResponse(req, res, schema, granularity) {
+async function sendAggregatedResponse(req, res, schema, granularity) {
   const { parsed, errors } = parseQuery(schema, req.query);
   if (errors) {
     return res.status(400).json({ error: 'Validation failed', details: errors });
   }
 
   const { startDate, endDate, meterIds, aggregationType, timezone, compareWith } = parsed;
+
+  const cacheable = Boolean(startDate && endDate) && !compareWith;
+  const cacheKey = cacheable
+    ? `analytics:agg:${granularity}:${startDate}:${endDate}:${aggregationType}:${(meterIds || []).join(',')}`
+    : null;
+
+  if (cacheKey) {
+    const cached = await cacheService.get(cacheKey);
+    if (cached && cached._storeSize === readingCount()) {
+      return res.json(cached.body);
+    }
+  }
 
   const readings = getReadings({
     meterIds: meterIds || undefined,
@@ -121,6 +142,16 @@ function sendAggregatedResponse(req, res, schema, granularity) {
     response.comparison.mode = compareWith;
   }
 
+  if (cacheKey) {
+    response.meta.cachedAt = new Date().toISOString();
+    // Best-effort fill; a cache outage must never fail the request.
+    try {
+      await cacheService.set(cacheKey, { _storeSize: readingCount(), body: response }, 300);
+    } catch {
+      // ignore
+    }
+  }
+
   res.json(response);
 }
 
@@ -158,12 +189,10 @@ function sendAggregatedResponse(req, res, schema, granularity) {
  *       400: { description: Validation failed }
  */
 router.get('/daily-summary', validate(dailySummarySchema), (req, res, next) => {
-  try {
-    sendAggregatedResponse(req, res, dailySummarySchema, 'day');
-  } catch (err) {
+  sendAggregatedResponse(req, res, dailySummarySchema, 'day').catch((err) => {
     log.error({ err }, 'daily-summary error');
     next(err);
-  }
+  });
 });
 
 /**
@@ -196,12 +225,10 @@ router.get('/daily-summary', validate(dailySummarySchema), (req, res, next) => {
  *       400: { description: Validation failed }
  */
 router.get('/monthly-summary', validate(monthlySummarySchema), (req, res, next) => {
-  try {
-    sendAggregatedResponse(req, res, monthlySummarySchema, 'month');
-  } catch (err) {
+  sendAggregatedResponse(req, res, monthlySummarySchema, 'month').catch((err) => {
     log.error({ err }, 'monthly-summary error');
     next(err);
-  }
+  });
 });
 
 /**

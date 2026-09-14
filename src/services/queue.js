@@ -101,28 +101,38 @@ class JobQueue extends EventEmitter {
   }
 
   /**
-   * Schedule a recurring job
+   * Schedule a recurring job.
+   *
+   * Delegates to the Scheduler singleton, which owns all recurring timing.
+   * This removes the duplicated interval implementation that previously
+   * lived here - a setInterval clone carrying the same 2^31-1 ms timer-clamp
+   * bug (a monthly interval would fire thousands of times per second) that
+   * was fixed in scheduler.js. One implementation of "run this repeatedly"
+   * means one place to fix timing bugs and one place to reason about
+   * overlapping runs.
+   *
    * @param {string} type - Job type
    * @param {Object} data - Job data
-   * @param {string} cronExpression - Cron expression (simplified for MVP: interval in ms)
+   * @param {string} intervalExpression - Interval in milliseconds, or one of
+   *   the cron forms the scheduler understands (e.g. '0 * * * *')
    * @returns {string} Schedule ID
    */
-  schedule(type, data, cronExpression) {
-    const scheduleId = `schedule_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-    
-    // For MVP, treat cronExpression as interval in milliseconds
-    const interval = parseInt(cronExpression, 10);
-    
-    if (isNaN(interval) || interval <= 0) {
-      throw new Error('Invalid cron expression. For MVP, provide interval in milliseconds');
+  schedule(type, data, intervalExpression) {
+    // Lazy require: scheduler.js does not import the queue, but keeping the
+    // dependency lazy avoids any future circular-import hazard.
+    const { scheduler } = require('./scheduler');
+
+    const scheduleName = `queue-${type}`;
+    if (scheduler.getSchedule(scheduleName)) {
+      scheduler.cancelSchedule(scheduleName);
     }
 
-    const intervalId = setInterval(() => {
+    const scheduleId = scheduler.schedule(scheduleName, String(intervalExpression), async () => {
       this.add(type, data);
-    }, interval);
+    });
 
-    this.emit('scheduled', { scheduleId, type, interval });
-    log.info({ scheduleId, type, interval }, 'Recurring job scheduled');
+    this.emit('scheduled', { scheduleId, type, intervalExpression });
+    log.info({ scheduleId, type, interval: intervalExpression }, 'Recurring job scheduled via scheduler');
 
     return scheduleId;
   }

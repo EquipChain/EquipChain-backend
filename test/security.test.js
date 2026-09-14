@@ -234,12 +234,15 @@ describe('Security Tests', () => {
       // Without CR/LF the value can no longer terminate a header early -
       // it is one opaque single-line token, not two headers.
 
-      // Integration: unbounded values (64KB) must be truncated, not echoed.
-      const huge = 'x'.repeat(65536);
+      // Integration: oversized values must be truncated, not echoed. Node
+      // itself 431s requests above its 16KB header cap; a 4KB value passes
+      // Node but must still be bounded by our middleware.
+      const huge = 'x'.repeat(4096);
       const res2 = await fetch(`http://localhost:${port}/`, {
         headers: { 'x-correlation-id': huge },
       });
       const id2 = res2.headers.get('x-correlation-id');
+      assert.ok(id2, 'bounded response must include a correlation id');
       assert.ok(id2.length <= 128, `correlation id must be bounded (got ${id2.length})`);
 
       // Integration: a legitimate client ID is honored intact.

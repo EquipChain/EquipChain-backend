@@ -154,29 +154,46 @@ async function gracefulShutdown(signal) {
   }
 }
 
-// Register signal handlers
-process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
-process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+// Process-level handlers are installed by installProcessHandlers() when the
+// server actually starts, NOT at module load: requiring this module (tests,
+// tooling, future embedders) must not mutate global process behavior as a
+// side effect. Node caps SIGTERM/SIGINT listeners at 10 - a codebase that
+// registers at import time eventually crashes unrelated test files with
+// MaxListenersExceeded, which is exactly as fun as it sounds.
+let handlersInstalled = false;
 
-// Handle uncaught exceptions
-process.on('uncaughtException', (error) => {
-  log.error({ error }, 'Uncaught exception');
-  // Exit directly: re-entering the graceful path from a broken process state
-  // risks recursion; the force-exit arm below bounds the shutdown window.
-  isShuttingDown = false;
-  gracefulShutdown('uncaughtException').catch(() => process.exit(1));
-});
+function installProcessHandlers() {
+  if (handlersInstalled) {
+    return;
+  }
+  handlersInstalled = true;
 
-// Handle unhandled promise rejections
-process.on('unhandledRejection', (reason, promise) => {
-  log.error({ reason, promise }, 'Unhandled promise rejection');
-  // Log-and-continue: a rejected background promise (e.g. a fire-and-forget
-  // OTel export) must not tear down a otherwise healthy API server.
-});
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
+  // Handle uncaught exceptions
+  process.on('uncaughtException', (error) => {
+    log.error({ error }, 'Uncaught exception');
+    // Exit directly: re-entering the graceful path from a broken process
+    // state risks recursion; the force-exit arm bounds the shutdown window.
+    isShuttingDown = false;
+    gracefulShutdown('uncaughtException').catch(() => process.exit(1));
+  });
+
+  // Handle unhandled promise rejections
+  process.on('unhandledRejection', (reason, promise) => {
+    log.error({ reason, promise }, 'Unhandled promise rejection');
+    // Log-and-continue: a rejected background promise (e.g. a
+    // fire-and-forget OTel export) must not tear down an otherwise
+    // healthy API server.
+  });
+}
 
 // Start server if this file is run directly
 if (require.main === module) {
   startServer();
 }
+
+module.exports = { startServer, gracefulShutdown, installProcessHandlers };
 
 module.exports = { startServer, gracefulShutdown };

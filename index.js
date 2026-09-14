@@ -31,7 +31,8 @@ if (
 }
 
 if (require.main === module) {
-  const { startServer } = require('./src/server');
+  const { startServer, installProcessHandlers } = require('./src/server');
+  installProcessHandlers();
   startServer();
 }
 

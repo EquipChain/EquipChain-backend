@@ -17,7 +17,7 @@
 //    gracefulShutdown (its own 'unhandledRejection' listener), so the exit
 //    path could recurse and log forever.
 
-require('./config/tracing');
+const { shutdownTracing } = require('./config/tracing');
 const { createServer } = require('http');
 const { Server } = require('socket.io');
 const { childLogger } = require('./config/logger');
@@ -143,6 +143,9 @@ async function gracefulShutdown(signal) {
   try {
     stopRetentionSweeper();
     await shutdownServices();
+    // 3. Flush tracing last, bounded - a wedged exporter must not extend
+    // the shutdown window (and tracing no longer owns its own exit path).
+    await shutdownTracing();
     log.info('Graceful shutdown complete');
     process.exit(0);
   } catch (error) {

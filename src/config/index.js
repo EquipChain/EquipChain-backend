@@ -26,6 +26,7 @@ const {
   JWT_EXPIRES_IN = '1h',
   METRICS_TOKEN = '',
   TRUST_PROXY = 'false',
+  ENABLE_DEV_CHALLENGE = 'false',
 } = process.env;
 
 const isProduction = NODE_ENV === 'production';
@@ -138,6 +139,9 @@ const config = Object.freeze({
     serviceName: OTEL_SERVICE_NAME,
   }),
   isProduction,
+  // /api/auth/challenge mints tokens without proving wallet ownership, so it
+  // is a dev/test convenience. Production requires an explicit opt-in.
+  enableDevChallenge: isProduction && ENABLE_DEV_CHALLENGE === 'true',
   isTest,
 });
 

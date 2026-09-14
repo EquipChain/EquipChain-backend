@@ -25,6 +25,7 @@ const crypto = require('crypto');
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
+const jwt = require('jsonwebtoken');
 const { trace } = require('@opentelemetry/api');
 const { childLogger } = require('./config/logger');
 const config = require('./config');
@@ -33,6 +34,7 @@ const { rateLimiter } = require('./middleware/rateLimiter');
 const { metricsMiddleware, renderMetrics } = require('./middleware/metrics');
 const { validate } = require('./middleware/validate');
 const { authChallengeSchema } = require('./schemas/validation.schema');
+const { authenticate } = require('./middleware/auth');
 const { sanitizeForLogging, sanitize } = require('./utils/sanitize');
 
 const app = express();
@@ -204,7 +206,12 @@ app.get('/api/health', (req, res) => {
  * /api/auth/challenge:
  *   post:
  *     summary: Wallet auth challenge
- *     description: Returns a mock JWT for the given wallet (development auth flow).
+ *     description: |
+ *       Mints a real JWT for the given wallet address (HS256, same secret as
+ *       every authenticated route). Disabled in production unless
+ *       ENABLE_DEV_CHALLENGE=true, because it grants tokens without proving
+ *       wallet ownership; the production flow is signature verification,
+ *       which layers onto this endpoint.
  *     tags: [Auth]
  *     requestBody:
  *       required: true
@@ -217,13 +224,29 @@ app.get('/api/health', (req, res) => {
  *     responses:
  *       200: { description: Challenge token issued }
  *       400: { description: Validation failed }
+ *       403: { description: Disabled in production (default) }
  */
 app.post('/api/auth/challenge', validate(authChallengeSchema), (req, res) => {
+  if (config.isProduction && !config.enableDevChallenge) {
+    return res.status(403).json({
+      error: 'Forbidden',
+      message: 'Dev challenge is disabled in production.',
+    });
+  }
   const { wallet } = req.body || {};
-  res.json({
-    token: `mock-jwt-${wallet || 'anonymous'}-${Date.now()}`,
-    expiresIn: 3600,
-  });
+  // Real signed token: verifies against config.jwtSecret like every other
+  // route, carries the wallet as `sub` and an explicit dev_challenge flag
+  // so downstream authorization can treat these tokens differently.
+  const token = jwt.sign(
+    {
+      sub: wallet || 'anonymous',
+      roles: ['user'],
+      dev_challenge: true,
+    },
+    config.jwtSecret,
+    { expiresIn: config.jwtExpiresIn }
+  );
+  res.json({ token, expiresIn: 3600 });
 });
 
 /**
@@ -231,21 +254,18 @@ app.post('/api/auth/challenge', validate(authChallengeSchema), (req, res) => {
  * /api/protected:
  *   get:
  *     summary: Protected sample route
- *     description: Requires a Bearer token; returns sensitive sample data.
+ *     description: Requires a valid signed JWT; returns sample data.
  *     tags: [Auth]
  *     security: [{ bearerAuth: [] }]
  *     responses:
  *       200: { description: Authorized payload }
  *       401: { description: Missing or invalid bearer token }
  */
-app.get('/api/protected', (req, res) => {
-  const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+app.get('/api/protected', authenticate, (req, res) => {
   res.json({
     data: 'Sensitive meter data',
     contract: config.contractId,
+    user: req.user.sub,
   });
 });
 

@@ -94,17 +94,21 @@ describe('API Integration Tests', () => {
   });
 
   describe('Auth Challenge', () => {
-    test('POST /api/auth/challenge should return token', async () => {
+    test('POST /api/auth/challenge mints a real verifiable JWT', async () => {
       const res = await makeRequest('POST', '/api/auth/challenge', { wallet: 'test-wallet' });
       assert.strictEqual(res.status, 200);
       assert.ok(res.body.token);
-      assert.ok(res.body.token.includes('test-wallet'));
+      // The token must verify against the server secret and carry claims.
+      const decoded = jwt.verify(res.body.token, process.env.JWT_SECRET);
+      assert.strictEqual(decoded.sub, 'test-wallet');
+      assert.strictEqual(decoded.dev_challenge, true);
     });
 
     test('POST /api/auth/challenge should work without wallet', async () => {
       const res = await makeRequest('POST', '/api/auth/challenge', {});
       assert.strictEqual(res.status, 200);
-      assert.ok(res.body.token.includes('anonymous'));
+      const decoded = jwt.verify(res.body.token, process.env.JWT_SECRET);
+      assert.strictEqual(decoded.sub, 'anonymous');
     });
   });
 
@@ -112,7 +116,6 @@ describe('API Integration Tests', () => {
     test('GET /api/protected should return 401 without auth', async () => {
       const res = await makeRequest('GET', '/api/protected');
       assert.strictEqual(res.status, 401);
-      assert.strictEqual(res.body.error, 'Unauthorized');
     });
 
     test('GET /api/protected should return 401 with invalid auth', async () => {
@@ -120,6 +123,23 @@ describe('API Integration Tests', () => {
         Authorization: 'Invalid format',
       });
       assert.strictEqual(res.status, 401);
+    });
+
+    test('GET /api/protected should return 401 for a garbage Bearer token', async () => {
+      const res = await makeRequest('GET', '/api/protected', null, {
+        Authorization: 'Bearer not-a-real-token',
+      });
+      assert.strictEqual(res.status, 401);
+    });
+
+    test('GET /api/protected accepts the token the challenge endpoint mints', async () => {
+      const challenge = await makeRequest('POST', '/api/auth/challenge', { wallet: 'flow-user' });
+      assert.strictEqual(challenge.status, 200);
+      const res = await makeRequest('GET', '/api/protected', null, {
+        Authorization: `Bearer ${challenge.body.token}`,
+      });
+      assert.strictEqual(res.status, 200);
+      assert.strictEqual(res.body.user, 'flow-user');
     });
   });
 

@@ -21,6 +21,11 @@ COPY --from=builder /app/index.js ./index.js
 COPY --from=builder /app/src ./src
 COPY --from=builder /app/scripts ./scripts
 
+# Persistent state (job queue snapshots). Owned by the unprivileged runtime
+# user so QUEUE_PERSIST_PATH can write inside the mounted volume.
+RUN mkdir -p /app/data && chown node:node /app/data
+VOLUME ["/app/data"]
+
 USER node
 
 EXPOSE 3000

@@ -11,8 +11,14 @@ services:
       CONTRACT_ID: ${CONTRACT_ID:-CB7PSJZALNWNX7NLOAM6LOEL4OJZMFPQZJMIYO522ZSACYWXTZIDEDSS}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       SKIP_SEED: ${SKIP_SEED:-1}
+      # Job durability: snapshots to the mounted volume so restarts and
+      # reschedules keep queued/in-flight work. Jobs running at shutdown are
+      # re-queued by recovery, so handlers stay safe to re-execute.
+      QUEUE_PERSIST_PATH: /app/data/queue-snapshot.json
     ports:
       - "${PORT:-3000}:3000"
+    volumes:
+      - queue-data:/app/data
     depends_on:
       redis:
         condition: service_healthy
@@ -43,6 +49,7 @@ services:
 
 volumes:
   redis-data:
+  queue-data:
 
 networks:
   equipchain:

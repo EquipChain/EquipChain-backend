@@ -1,6 +1,6 @@
 const { test, describe, beforeEach } = require('node:test');
 const assert = require('node:assert');
-const { MockSorobanClient } = require('./mocks/blockchain');
+const { MockSorobanClient } = require('./blockchain');
 
 describe('Mock Soroban Client', () => {
   let client;

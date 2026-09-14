@@ -7,6 +7,12 @@ const log = childLogger('queue');
 const JOB_CONCURRENCY = parseInt(process.env.JOB_CONCURRENCY || '5', 10);
 const JOB_RETRY_ATTEMPTS = parseInt(process.env.JOB_RETRY_ATTEMPTS || '3', 10);
 
+// Completed/failed jobs are kept for status inspection (getStats, getStatus)
+// but must not accumulate forever: the billing/sync/cacheWarm schedules add
+// jobs every few minutes, so an unbounded Map grows for the life of the
+// process. Oldest terminal jobs are evicted once the cap is hit.
+const JOB_HISTORY_LIMIT = parseInt(process.env.JOB_HISTORY_LIMIT || '1000', 10);
+
 // Job status constants
 const JobStatus = {
   QUEUED: 'queued',
@@ -326,6 +332,7 @@ class JobQueue extends EventEmitter {
       job.completedAt = new Date();
       this.activeCount--;
       this.runningJobs.delete(job.id);
+      this._evictOldTerminalJobs();
       this.emit('completed', job);
       log.info({ jobId: job.id, type: job.type }, 'Job completed');
     } catch (error) {
@@ -358,6 +365,7 @@ class JobQueue extends EventEmitter {
         job.failedAt = new Date();
         this.activeCount--;
         this.runningJobs.delete(job.id);
+        this._evictOldTerminalJobs();
         this.emit('failed', job);
         log.error({ 
           jobId: job.id, 
@@ -370,6 +378,32 @@ class JobQueue extends EventEmitter {
 
     // Process next jobs
     this._process();
+  }
+
+  /**
+   * Evict the oldest terminal (completed/failed/cancelled) jobs once total
+   * stored jobs exceed JOB_HISTORY_LIMIT. Active and queued jobs are never
+   * evicted, so cancellation and status tracking keep working. Insertion-
+   * ordered Maps make 'first key' the oldest job, so eviction is O(1) per
+   * job rather than a sort.
+   */
+  _evictOldTerminalJobs() {
+    if (this.jobs.size <= JOB_HISTORY_LIMIT) {
+      return;
+    }
+
+    for (const [id, job] of this.jobs) {
+      if (this.jobs.size <= JOB_HISTORY_LIMIT) {
+        break;
+      }
+      if (
+        job.status === JobStatus.COMPLETED ||
+        job.status === JobStatus.FAILED ||
+        job.status === JobStatus.CANCELLED
+      ) {
+        this.jobs.delete(id);
+      }
+    }
   }
 
   /**

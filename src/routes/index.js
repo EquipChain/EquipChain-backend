@@ -19,6 +19,14 @@ const { requireAdmin } = require('../middleware/requireAdmin');
 const { determineTier } = require('../middleware/rateLimiter');
 const { RATE_LIMIT_TIERS } = require('../config/rateLimits');
 
+// Deploy identity: GIT_SHA/DEPLOY_TIME come from the deployment environment
+// (Docker build args, CI, or ops tooling). Unset locally, they simply don't
+// appear - which is preferable to pretending a dev run is a known build.
+const DEPLOY_IDENTITY = {
+  ...(process.env.GIT_SHA ? { gitSha: process.env.GIT_SHA } : {}),
+  ...(process.env.DEPLOY_TIME ? { deployedAt: process.env.DEPLOY_TIME } : {}),
+};
+
 const router = express.Router();
 
 // ─── Maintenance mode gate ──────────────────────────────────────────────────
@@ -114,6 +122,7 @@ router.get('/health', (req, res) => {
   const healthData = {
     status: 'ok',
     timestamp: new Date().toISOString(),
+    ...DEPLOY_IDENTITY,
   };
 
   // Add queue stats if queue service is available

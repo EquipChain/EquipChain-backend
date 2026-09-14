@@ -3,9 +3,13 @@
   "version": "1.0.0",
   "description": "Express API for Equipchain utility meter monitoring and data access",
   "main": "index.js",
+  "engines": {
+    "node": ">=20 <25"
+  },
   "scripts": {
     "test": "NODE_ENV=test node --test",
     "start": "node index.js",
+    "lint": "eslint src/ scripts/ index.js",
     "k6:smoke": "k6 run k6/smoke.js",
     "k6:load": "k6 run k6/load.js",
     "k6:stress": "k6 run k6/stress.js",

@@ -1,4 +1,4 @@
-const { describe, it, before, beforeEach, after } = require('node:test');
+const { describe, it, beforeEach, after } = require('node:test');
 const assert = require('node:assert');
 const jwt = require('jsonwebtoken');
 
@@ -49,6 +49,17 @@ describe('Admin API auth guards', () => {
 
   it('returns 401 with a malformed token', async () => {
     const res = await request('GET', '/api/admin/users', { token: 'not-a-real-token' });
+    assert.strictEqual(res.status, 401);
+  });
+
+  it('rejects tokens signed with a different algorithm (confusion guard)', async () => {
+    // Craft a token whose header declares "none" - without an algorithms
+    // allowlist on jwt.verify, libraries have historically accepted such
+    // forgeries. The middleware pins HS256, so this must 401.
+    const forged = jwt.sign({ sub: 'attacker', roles: ['admin'] }, 'irrelevant', {
+      algorithm: 'none',
+    });
+    const res = await request('GET', '/api/admin/users', { token: forged });
     assert.strictEqual(res.status, 401);
   });
 });

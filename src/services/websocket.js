@@ -52,7 +52,9 @@ function handshakeAuth(socket, next) {
     return next(new Error('unauthorized'));
   }
   try {
-    socket.data.user = jwt.verify(token, config.jwtSecret);
+    // Algorithm pinned to match the HTTP middleware (see auth.js): only
+    // HS256 tokens can verify, closing algorithm-confusion forgeries.
+    socket.data.user = jwt.verify(token, config.jwtSecret, { algorithms: ['HS256'] });
     return next();
   } catch {
     return next(new Error('unauthorized'));

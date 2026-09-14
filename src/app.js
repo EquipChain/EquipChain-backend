@@ -254,7 +254,7 @@ app.post('/api/auth/challenge', validate(authChallengeSchema), (req, res) => {
       dev_challenge: true,
     },
     config.jwtSecret,
-    { expiresIn: config.jwtExpiresIn }
+    { expiresIn: config.jwtExpiresIn, algorithm: 'HS256' }
   );
   res.json({ token, expiresIn: 3600 });
 });

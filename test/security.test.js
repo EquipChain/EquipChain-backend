@@ -215,9 +215,39 @@ describe('Security Tests', () => {
 
       assert.strictEqual(res.status, 200);
       const returnedCorrelationId = res.headers.get('x-correlation-id');
-      
+
       // The returned correlation ID should be the same but not cause issues
       assert.ok(returnedCorrelationId);
+    });
+
+    it('strips control characters (header smuggling) and bounds length', async () => {
+      const port = server.address().port;
+
+      // Unit-level: the exact smuggle payload must be defused by the same
+      // sanitizer the middleware uses (undici refuses to SEND CR/LF headers,
+      // so this vector can only be exercised on the value itself).
+      const { sanitizeHeaderValue } = require('../src/utils/sanitize');
+      const smuggle = 'abc\r\nSet-Cookie: pwned=1';
+      const cleaned = sanitizeHeaderValue(smuggle);
+      assert.strictEqual(cleaned.includes('\r'), false, 'CR must be stripped');
+      assert.strictEqual(cleaned.includes('\n'), false, 'LF must be stripped');
+      // Without CR/LF the value can no longer terminate a header early -
+      // it is one opaque single-line token, not two headers.
+
+      // Integration: unbounded values (64KB) must be truncated, not echoed.
+      const huge = 'x'.repeat(65536);
+      const res2 = await fetch(`http://localhost:${port}/`, {
+        headers: { 'x-correlation-id': huge },
+      });
+      const id2 = res2.headers.get('x-correlation-id');
+      assert.ok(id2.length <= 128, `correlation id must be bounded (got ${id2.length})`);
+
+      // Integration: a legitimate client ID is honored intact.
+      const legit = 'trace-abc-123';
+      const res3 = await fetch(`http://localhost:${port}/`, {
+        headers: { 'x-correlation-id': legit },
+      });
+      assert.strictEqual(res3.headers.get('x-correlation-id'), legit);
     });
   });
 

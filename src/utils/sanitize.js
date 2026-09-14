@@ -126,6 +126,23 @@ function removeControlChars(str) {
 }
 
 /**
+ * Sanitize a value destined for an HTTP header or other single-line protocol
+ * field: strips ALL control characters including CR/LF/tab. removeControlChars
+ * deliberately preserves line breaks for log readability - but a header value
+ * carrying CR/LF is a smuggling vector and CR is invisible in most log
+ * viewers, so header contexts need the stricter form.
+ * @param {string} str - The header value to clean
+ * @returns {string} The value with all control characters removed
+ */
+function sanitizeHeaderValue(str) {
+  if (typeof str !== 'string') {
+    return str;
+  }
+  // eslint-disable-next-line no-control-regex
+  return str.replace(/[\x00-\x1F\x7F]/g, '');
+}
+
+/**
  * Sanitize data for logging (remove control characters and limit length)
  * @param {*} data - The data to sanitize for logging
  * @param {number} maxLength - Maximum length for strings (default: 1000)
@@ -162,5 +179,6 @@ module.exports = {
   stripPrototypeKeys,
   hasPrototypeKeys,
   removeControlChars,
+  sanitizeHeaderValue,
   sanitizeForLogging,
 };

@@ -36,7 +36,7 @@ const { metricsMiddleware, renderMetrics } = require('./middleware/metrics');
 const { validate } = require('./middleware/validate');
 const { authChallengeSchema } = require('./schemas/validation.schema');
 const { authenticate } = require('./middleware/auth');
-const { sanitizeForLogging, sanitize, stripPrototypeKeys } = require('./utils/sanitize');
+const { sanitizeForLogging, sanitize, stripPrototypeKeys, sanitizeHeaderValue } = require('./utils/sanitize');
 
 const app = express();
 const log = childLogger('http');
@@ -171,7 +171,18 @@ app.use(
 // ─── Correlation ID + request logging ────────────────────────────────────────
 
 app.use((req, res, next) => {
-  const correlationId = req.headers['x-correlation-id'] || crypto.randomUUID();
+  // Client-supplied correlation IDs are honored for trace continuity but
+  // MUST be sanitized before they are echoed into a response header and
+  // written to logs: unsanitized, the header is an injection vector (a
+  // crafted value lands in every downstream system that trusts it) and an
+  // unbounded header bloats both the response and every log line.
+  // removeControlChars strips CR/LF (header smuggling) and other control
+  // bytes; 128 chars is generous for UUIDs and human trace IDs.
+  const rawCorrelationId = req.headers['x-correlation-id'];
+  const correlationId =
+    typeof rawCorrelationId === 'string' && rawCorrelationId.length > 0
+      ? sanitizeHeaderValue(rawCorrelationId).slice(0, 128) || crypto.randomUUID()
+      : crypto.randomUUID();
   req.correlationId = correlationId;
   res.setHeader('x-correlation-id', correlationId);
 

@@ -1,0 +1,23 @@
+# Dependabot keeps dependencies and CI action pins current.
+# Version updates run weekly in one batch to keep review load predictable;
+# security updates are always separate and prioritized by GitHub.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      # Batch minor/patch bumps so the diff is reviewable; majors stay
+      # individual because they usually need code changes.
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
+    open-pull-requests-limit: 5
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5

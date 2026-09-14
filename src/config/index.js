@@ -65,8 +65,15 @@ if (!bodySizeMatch || !(bodySizeMatch[2] in BODY_SIZE_UNITS)) {
 
 // JWT_SECRET governs every authenticated route (admin API, exports).
 // Failing fast with a precise message beats serving 500
-// "Server misconfigured" on each request after boot - and beats the
-// previous silent acceptance of weak development secrets in production.
+// "Server misconfigured" on each request after boot.
+//
+// Policy by environment:
+// - production: secret is REQUIRED and must be >= 32 chars (brute-force
+//   resistance); boot fails loudly otherwise.
+// - development/test: a shorter secret is accepted so local runs and test
+//   suites can use deterministic secrets - but a missing secret still gets
+//   an ephemeral fallback with a loud warning, and production parity is
+//   enforced by CI booting with no secret.
 if (!JWT_SECRET || JWT_SECRET.trim().length < 32) {
   if (isProduction) {
     throw new Error(
@@ -85,8 +92,8 @@ if (!JWT_SECRET || JWT_SECRET.trim().length < 32) {
 }
 
 const effectiveJwtSecret =
-  JWT_SECRET && JWT_SECRET.trim().length >= 32
-    ? JWT_SECRET
+  JWT_SECRET && JWT_SECRET.trim().length > 0
+    ? JWT_SECRET.trim()
     : `dev-only-${require('crypto').randomBytes(24).toString('hex')}`;
 
 const config = Object.freeze({

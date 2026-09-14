@@ -47,6 +47,33 @@ function registerGaugeProvider(provider) {
   return () => gaugeProviders.delete(provider);
 }
 
+// ─── Event-loop lag sampler ──────────────────────────────────────────────
+
+// Most recent measured lag in ms. The sampler schedules setImmediate on a
+// recurring timer: when the immediate fires, the elapsed time since its
+// scheduling approximates how long the loop was busy. Sampling continuously
+// (rather than at scrape time) keeps renderMetrics synchronous - Prometheus
+// text exposition has no deferred semantics.
+let lastLagMs = 0;
+let lagTimer = null;
+
+/**
+ * Start the 1s lag sampler. Called by server boot; idempotent, unref'd so
+ * it never holds the process open.
+ */
+function startLagSampler() {
+  if (lagTimer) return;
+  lagTimer = setInterval(() => {
+    const scheduled = process.hrtime.bigint();
+    setImmediate(() => {
+      lastLagMs = Number(process.hrtime.bigint() - scheduled) / 1e6;
+    });
+  }, 1000);
+  if (typeof lagTimer.unref === 'function') {
+    lagTimer.unref();
+  }
+}
+
 /**
  * Best-effort route label for cardinality safety. Falls back through:
  * mounted route path -> baseUrl+'/' -> 'unmatched' (e.g. 404s).
@@ -152,6 +179,15 @@ function renderMetrics() {
   lines.push('# TYPE equipchain_process_heap_bytes gauge');
   lines.push(`equipchain_process_heap_bytes{type="used"} ${mem.heapUsed}`);
   lines.push(`equipchain_process_heap_bytes{type="total"} ${mem.heapTotal}`);
+  lines.push(`equipchain_process_heap_bytes{type="rss"} ${mem.rss}`);
+
+  // Event-loop lag: the single most telling health metric for a Node API.
+  // A pinned CPU, a synchronous hot path, or a wedged loop shows up here
+  // long before request latency percentiles move. Sampled continuously by
+  // startLagSampler(); renderMetrics stays synchronous.
+  lines.push('# HELP equipchain_eventloop_lag_ms Approximate event-loop lag in ms.');
+  lines.push('# TYPE equipchain_eventloop_lag_ms gauge');
+  lines.push(`equipchain_eventloop_lag_ms ${lastLagMs.toFixed(3)}`);
 
   // Service gauges (queue depth, schedules, cache pressure, ...).
   for (const provider of gaugeProviders) {
@@ -178,4 +214,4 @@ function renderMetrics() {
   return lines.join('\n') + '\n';
 }
 
-module.exports = { metricsMiddleware, renderMetrics, registerGaugeProvider, HTTP_DURATION_BUCKETS_MS };
+module.exports = { metricsMiddleware, renderMetrics, registerGaugeProvider, startLagSampler, HTTP_DURATION_BUCKETS_MS };

@@ -18,6 +18,7 @@
 //    path could recurse and log forever.
 
 const { shutdownTracing } = require('./config/tracing');
+const { startLagSampler } = require('./middleware/metrics');
 const { createServer } = require('http');
 const { Server } = require('socket.io');
 const { childLogger } = require('./config/logger');
@@ -54,6 +55,9 @@ async function startServer() {
     // Start the readings retention sweeper (hourly; unref'd) so the
     // in-memory store cannot grow without bound while the server runs.
     startRetentionSweeper();
+
+    // Continuous event-loop lag sampling feeds /metrics.
+    startLagSampler();
 
     // Bound request lifecycle: without these, a client that opens a
     // socket and dribbles bytes (slowloris) or a handler that never

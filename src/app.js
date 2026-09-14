@@ -39,6 +39,14 @@ const app = express();
 const log = childLogger('http');
 app.disable('x-powered-by');
 
+// Reverse-proxy awareness. Default false: Express then ignores
+// X-Forwarded-* headers, which is the safe posture for direct exposure (a
+// client could otherwise spoof its IP to evade rate limits). Operators
+// running behind nginx/ALB/Cloudflare set TRUST_PROXY=true (or a hop count
+// / subnet spec) so req.ip resolves to the real client address and per-IP
+// rate limiting throttles clients individually instead of collectively.
+app.set('trust proxy', config.trustProxy);
+
 // ─── Metrics ─────────────────────────────────────────────────────────────────
 
 // Mounted first so durations cover every downstream middleware (security,

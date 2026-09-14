@@ -25,6 +25,7 @@ const {
   JWT_SECRET = '',
   JWT_EXPIRES_IN = '1h',
   METRICS_TOKEN = '',
+  TRUST_PROXY = 'false',
 } = process.env;
 
 const isProduction = NODE_ENV === 'production';
@@ -96,6 +97,22 @@ const effectiveJwtSecret =
     ? JWT_SECRET.trim()
     : `dev-only-${require('crypto').randomBytes(24).toString('hex')}`;
 
+/**
+ * Parse TRUST_PROXY into a value Express accepts:
+ *   'false' (default) -> false (ignore X-Forwarded-*; spoof-proof)
+ *   'true'            -> true (trust everything: only for known-proxy fronting)
+ *   'loopback'        -> 'loopback' (trust local proxies)
+ *   '1', '2', ...     -> hop count (trust N proxies in front)
+ *   anything else     -> passed through as a subnet/IP spec string
+ */
+function parseTrustProxy(raw) {
+  const value = String(raw || 'false').trim();
+  if (value === 'false' || value === '') return false;
+  if (value === 'true') return true;
+  if (/^\d+$/.test(value)) return Number(value);
+  return value; // 'loopback', 'linklocal', subnets, etc.
+}
+
 const config = Object.freeze({
   env: NODE_ENV,
   port: toInt(PORT, 3000),
@@ -108,6 +125,9 @@ const config = Object.freeze({
   jwtSecret: effectiveJwtSecret,
   metricsToken: METRICS_TOKEN || undefined,
   jwtExpiresIn: JWT_EXPIRES_IN,
+  // Parsed once here so the app only deals with a ready Express value.
+  // See the app-level comment for the security trade-off of enabling it.
+  trustProxy: parseTrustProxy(TRUST_PROXY),
   jobs: Object.freeze({
     concurrency: toInt(JOB_CONCURRENCY, 5),
     retryAttempts: toInt(JOB_RETRY_ATTEMPTS, 3),

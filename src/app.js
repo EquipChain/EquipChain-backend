@@ -25,6 +25,7 @@ const crypto = require('crypto');
 const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
+const compression = require('compression');
 const jwt = require('jsonwebtoken');
 const { trace } = require('@opentelemetry/api');
 const { childLogger } = require('./config/logger');
@@ -109,6 +110,15 @@ app.use(
     maxAge: 86400,
   })
 );
+
+// Response compression for compressible types (JSON analytics payloads, CSV
+// and NDJSON exports). Meter-reading data is highly repetitive, so gzip
+// shrinks export payloads by an order of magnitude - directly proportional
+// to mobile-bandwidth transfer time for fleet operators. Threshold skips
+// tiny bodies where compression overhead exceeds savings; the default filter
+// respects clients' Accept-Encoding and never compresses already-compressed
+// content types.
+app.use(compression({ threshold: 1024 }));
 
 // Ensure Content-Type is application/json for all API responses
 app.use((req, res, next) => {

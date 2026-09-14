@@ -24,6 +24,10 @@ const { childLogger } = require('./config/logger');
 const config = require('./config');
 const app = require('./app');
 const { initServices, shutdownServices } = require('./services');
+const {
+  startRetentionSweeper,
+  stopRetentionSweeper,
+} = require('./services/aggregator');
 
 const log = childLogger('server');
 
@@ -46,6 +50,10 @@ async function startServer() {
 
     // Make the socket.io server available to services
     app.set('io', io);
+
+    // Start the readings retention sweeper (hourly; unref'd) so the
+    // in-memory store cannot grow without bound while the server runs.
+    startRetentionSweeper();
 
     // Start listening
     server.listen(config.port, config.host, () => {
@@ -120,6 +128,7 @@ async function gracefulShutdown(signal) {
 
   // 2. Tear down services (idempotent; safe even if init never completed)
   try {
+    stopRetentionSweeper();
     await shutdownServices();
     log.info('Graceful shutdown complete');
     process.exit(0);

@@ -19,6 +19,60 @@ let readings = [];
 let nextId = 1;
 
 /**
+ * Retention window for stored readings, in milliseconds. The store is
+ * in-memory by design (analytics are recomputed per request), so keeping
+ * readings older than the analytics UIs can ever query only burns heap.
+ * Defaults to 90 days - the seed window and a sane dashboard range.
+ */
+const RETENTION_MS = Math.max(1, parseInt(process.env.READINGS_RETENTION_DAYS || '90', 10)) * 24 * 60 * 60 * 1000;
+
+/**
+ * Drop readings older than the retention window. Runs on a timer (started
+ * by startRetentionSweeper) rather than on ingest: analytics tests and the
+ * dev seeder legitimately insert historical data, and per-insert pruning
+ * would silently destroy it. Sweeping on a wall-clock cadence only removes
+ * data that AGED OUT while stored, which is the actual retention contract.
+ */
+function pruneOldReadings() {
+  const cutoff = Date.now() - RETENTION_MS;
+  const before = readings.length;
+  readings = readings.filter((r) => r.timestamp >= cutoff);
+  if (readings.length !== before) {
+    // nextId stays monotonic so ids never repeat across prunes.
+    const { childLogger } = require('../config/logger');
+    childLogger('aggregator').debug(
+      { pruned: before - readings.length, remaining: readings.length },
+      'Pruned readings outside retention window'
+    );
+  }
+  return before - readings.length;
+}
+
+let retentionTimer = null;
+
+/**
+ * Start the periodic retention sweep. Intentionally NOT started at module
+ * load: the server composition root (src/server.js / index.js) calls this
+ * after seeding, and tests never start it, keeping ingestion deterministic.
+ * @returns {void}
+ */
+function startRetentionSweeper() {
+  if (retentionTimer) return;
+  const SWEEP_INTERVAL_MS = 60 * 60 * 1000; // hourly
+  retentionTimer = setInterval(pruneOldReadings, SWEEP_INTERVAL_MS);
+  if (typeof retentionTimer.unref === 'function') {
+    retentionTimer.unref();
+  }
+}
+
+function stopRetentionSweeper() {
+  if (retentionTimer) {
+    clearInterval(retentionTimer);
+    retentionTimer = null;
+  }
+}
+
+/**
  * Generate a simple incrementing ID.
  * @returns {string}
  */
@@ -435,6 +489,10 @@ module.exports = {
   getReadings,
   clearReadings,
   readingCount,
+  pruneOldReadings,
+  startRetentionSweeper,
+  stopRetentionSweeper,
+  RETENTION_MS,
   // Aggregation
   aggregateReadings,
   fleetSummary,

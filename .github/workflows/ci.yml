@@ -9,11 +9,47 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Lint
+        run: npx eslint src/ scripts/ index.js
+      - name: Test
+        run: npm test
+
+  audit:
+    # Advisory job: reports known vulnerabilities in dependencies without
+    # blocking the pipeline (production deps only; dev-only advisories are
+    # expected noise). Escalate to blocking by removing the continue-on-error.
+    runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: npm
-      - run: npm install
-      - run: npm test
+      - name: Install
+        run: npm ci
+      - name: Audit production dependencies
+        run: npm audit --omit=dev --audit-level=high
+
+  docker:
+    # Build the production image on every PR to catch Dockerfile breakage
+    # before merge; the image is not pushed from CI.
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build production image
+        run: docker build --target production -t equipchain-backend:ci .

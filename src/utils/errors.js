@@ -25,4 +25,29 @@ class ValidationError extends Error {
   }
 }
 
-module.exports = { ValidationError };
+/**
+ * Raised when a backing dependency (cache, queue, datastore) is unavailable
+ * or failing. Carries statusCode 503 so the error middleware answers with a
+ * retryable "Service Unavailable" instead of a misleading 500 - the caller
+ * did nothing wrong, and load balancers/orchestrators treat 503 as the
+ * signal to shed load or reroute.
+ *
+ * @param {string} dependency - Which dependency failed (e.g. 'cache')
+ * @param {string} [detail] - Optional safe technical detail (no internals)
+ */
+class DependencyUnavailableError extends Error {
+  constructor(dependency, detail) {
+    super(detail ? `${dependency} unavailable: ${detail}` : `${dependency} unavailable`);
+
+    this.name = 'DependencyUnavailableError';
+    this.code = 'DEPENDENCY_UNAVAILABLE';
+    this.statusCode = 503;
+    this.dependency = dependency;
+
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, DependencyUnavailableError);
+    }
+  }
+}
+
+module.exports = { ValidationError, DependencyUnavailableError };

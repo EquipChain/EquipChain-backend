@@ -320,8 +320,12 @@ app.use((req, res) => {
 
 // ─── Error handler ───────────────────────────────────────────────────────────
 
+/**
+ * Central error serializer. Exported so tests and additional mounts reuse
+ * the exact same status/message/header semantics as the app pipeline.
+ */
 // eslint-disable-next-line no-unused-vars
-app.use((err, req, res, next) => {
+function errorHandler(err, req, res, next) {
   // Body-parser errors: report the client's mistake precisely (413/400)
   if (err.type === 'entity.too.large') {
     return res.status(413).json({
@@ -356,17 +360,34 @@ app.use((err, req, res, next) => {
 
   const status = err.status || err.statusCode || 500;
   const isClientError = status >= 400 && status < 500;
+  // Dependency failures (503) are safe to describe: they say WHICH
+  // dependency is down and nothing about internals, and the retryable
+  // status is the whole point - clients and LBs act on 503 differently
+  // than on 500.
+  const isDependencyError = err.name === 'DependencyUnavailableError';
+
+  // Retryable dependency failures advertise Retry-After so clients back
+  // off instead of hammering a struggling dependency.
+  if (status === 503) {
+    res.setHeader('Retry-After', 5);
+  }
 
   res.status(status).json({
     error: err.name || 'Internal Server Error',
     // Client errors are the caller's fault - the message is actionable and
-    // safe. For 500s the message may contain internals (driver errors, file
-    // paths, queries), so it never leaves the server regardless of env; the
+    // safe. Dependency errors get a fixed, dependency-shaped message. For
+    // 500s the message may contain internals (driver errors, file paths,
+    // queries), so it never leaves the server regardless of env; the
     // correlation ID in the response links the client to the server log.
     message: isClientError
       ? sanitize(err.message)
-      : 'An error occurred. Reference: ' + (req.correlationId || 'unknown'),
+      : isDependencyError
+        ? 'A required dependency is temporarily unavailable. Retry shortly.'
+        : 'An error occurred. Reference: ' + (req.correlationId || 'unknown'),
   });
-});
+}
+
+app.use(errorHandler);
 
 module.exports = app;
+module.exports.errorHandler = errorHandler;

@@ -3,6 +3,7 @@ const assert = require('node:assert');
 
 const app = require('../src/app');
 const { _resetStore } = require('../src/middleware/rateLimiter');
+const { DependencyUnavailableError } = require('../src/utils/errors');
 const server = app.listen(0);
 
 after(() => server.close());
@@ -94,6 +95,36 @@ describe('Security Tests', () => {
       const throttled = statuses.filter((s) => s === 429).length;
       assert.strictEqual(allowed, 5, `exactly 5 attempts allowed (got ${allowed})`);
       assert.strictEqual(throttled, 2, 'attempts beyond 5 must be throttled');
+    });
+  });
+
+  describe('Dependency failure semantics', () => {
+    it('maps DependencyUnavailableError to retryable 503 with Retry-After, no internals', async () => {
+      // Use the exported errorHandler on a fresh mini-app so we exercise the
+      // exact production error semantics without mutating this app's mount
+      // order (routes cannot be added after the 404 handler).
+      const express = require('express');
+      const { errorHandler } = require('../src/app');
+      const mini = express();
+      mini.get('/dep', () => {
+        throw new DependencyUnavailableError('cache', 'ECONNREFUSED 10.0.0.5:6379');
+      });
+      mini.use(errorHandler);
+      const miniServer = mini.listen(0);
+      const port = miniServer.address().port;
+
+      const res = await fetch(`http://localhost:${port}/dep`);
+      const body = await res.json();
+      miniServer.close();
+
+      assert.strictEqual(res.status, 503);
+      assert.strictEqual(res.headers.get('retry-after'), '5');
+      assert.strictEqual(body.error, 'DependencyUnavailableError');
+      // The technical detail must NOT reach the client...
+      assert.ok(!body.message.includes('ECONNREFUSED'));
+      assert.ok(!body.message.includes('10.0.0.5'));
+      // ...but the fixed retryable message must.
+      assert.ok(body.message.includes('temporarily unavailable'));
     });
   });
 

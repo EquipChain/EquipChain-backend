@@ -44,6 +44,37 @@ describe('Security Tests', () => {
     });
   });
 
+  describe('Prototype Pollution Guard', () => {
+    it('strips __proto__ keys from JSON bodies at the boundary', async () => {
+      const port = server.address().port;
+      const malicious = JSON.stringify({
+        wallet: 'w1',
+        '__proto__': { isAdmin: true },
+      });
+
+      const res = await fetch(`http://localhost:${port}/api/auth/challenge`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: malicious,
+      });
+      // Route must still work on the cleaned body (200), not crash or 500.
+      assert.strictEqual(res.status, 200);
+      // The global prototype must be untouched.
+      assert.strictEqual(({}).isAdmin, undefined);
+    });
+
+    it('rejects bodies carrying nested constructor/prototype payloads safely', async () => {
+      const port = server.address().port;
+      const res = await fetch(`http://localhost:${port}/api/auth/challenge`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ nested: { constructor: { prototype: { x: 1 } } } }),
+      });
+      assert.strictEqual(res.status, 200);
+      assert.strictEqual(({}).x, undefined);
+    });
+  });
+
   describe('XSS Protection', () => {
     it('sanitizes XSS payload in error responses', async () => {
       const port = server.address().port;

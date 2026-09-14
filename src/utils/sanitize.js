@@ -60,6 +60,56 @@ function sanitizeDeep(value) {
 }
 
 /**
+ * Keys that enable prototype pollution when they appear in untrusted JSON
+ * ("{"__proto__": {...}}" merges onto Object.prototype through naive deep
+ * merges; constructor/reset are adjacent hazards). Blocks the whole object
+ * graph under these keys at the body-parsing boundary.
+ */
+const DANGEROUS_KEYS = new Set(['__proto__', 'constructor', 'prototype']);
+
+/**
+ * Recursively strip prototype-pollution keys from a parsed value.
+ * Runs on every JSON body before routes see it: defense happens at the
+ * boundary, so no individual route or merge helper can forget it.
+ * @param {*} value - Parsed JSON value
+ * @returns {*} Value with dangerous keys removed
+ */
+function stripPrototypeKeys(value) {
+  if (Array.isArray(value)) {
+    return value.map(stripPrototypeKeys);
+  }
+  if (value !== null && typeof value === 'object') {
+    const clean = {};
+    for (const [key, val] of Object.entries(value)) {
+      if (!DANGEROUS_KEYS.has(key)) {
+        clean[key] = stripPrototypeKeys(val);
+      }
+    }
+    return clean;
+  }
+  return value;
+}
+
+/**
+ * Detect prototype-pollution keys without mutating (for strict checks).
+ * @param {*} value - Parsed JSON value
+ * @returns {boolean} True if any dangerous key exists at any depth
+ */
+function hasPrototypeKeys(value) {
+  if (Array.isArray(value)) {
+    return value.some(hasPrototypeKeys);
+  }
+  if (value !== null && typeof value === 'object') {
+    for (const [key, val] of Object.entries(value)) {
+      if (DANGEROUS_KEYS.has(key) || hasPrototypeKeys(val)) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/**
  * Remove control characters from a string to prevent log injection
  * @param {string} str - The string to clean
  * @returns {string} The string with control characters removed
@@ -109,6 +159,8 @@ module.exports = {
   sanitize,
   sanitizeObject,
   sanitizeDeep,
+  stripPrototypeKeys,
+  hasPrototypeKeys,
   removeControlChars,
   sanitizeForLogging,
 };

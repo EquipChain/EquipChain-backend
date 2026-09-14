@@ -36,7 +36,7 @@ const { metricsMiddleware, renderMetrics } = require('./middleware/metrics');
 const { validate } = require('./middleware/validate');
 const { authChallengeSchema } = require('./schemas/validation.schema');
 const { authenticate } = require('./middleware/auth');
-const { sanitizeForLogging, sanitize } = require('./utils/sanitize');
+const { sanitizeForLogging, sanitize, stripPrototypeKeys } = require('./utils/sanitize');
 
 const app = express();
 const log = childLogger('http');
@@ -132,10 +132,22 @@ app.use((req, res, next) => {
   next();
 });
 
-// Body parsing with size limits; PayloadTooLarge becomes a JSON 413 response
+// Body parsing with size limits; PayloadTooLarge becomes a JSON 413 response.
+// A follow-up middleware strips prototype-pollution keys (__proto__/
+// constructor/prototype) AFTER body-parser runs - running in the parser's
+// verify hook is pointless because body-parser overwrites req.body with its
+// own parse afterwards. Stripping post-parse guarantees no route or merge
+// helper ever sees a pollution payload: a single naive deep-merge of a
+// client body otherwise hands attackers a path to rewrite process defaults.
 const jsonParser = express.json({ limit: config.maxBodySize });
 app.use(jsonParser);
 app.use(express.urlencoded({ extended: true, limit: config.maxBodySize }));
+app.use((req, res, next) => {
+  if (req.body && typeof req.body === 'object') {
+    req.body = stripPrototypeKeys(req.body);
+  }
+  next();
+});
 app.use('/api', rateLimiter);
 
 // ─── Correlation ID + request logging ────────────────────────────────────────

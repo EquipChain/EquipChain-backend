@@ -1,4 +1,6 @@
 const EventEmitter = require('events');
+const fs = require('fs');
+const path = require('path');
 const { childLogger } = require('../config/logger');
 
 const log = childLogger('queue');
@@ -6,6 +8,15 @@ const log = childLogger('queue');
 // Environment configuration
 const JOB_CONCURRENCY = parseInt(process.env.JOB_CONCURRENCY || '5', 10);
 const JOB_RETRY_ATTEMPTS = parseInt(process.env.JOB_RETRY_ATTEMPTS || '3', 10);
+
+// Optional file-backed persistence. Jobs previously lived only in memory, so
+// any restart silently dropped every queued and in-flight job. When
+// QUEUE_PERSIST_PATH is set, the queue writes atomic JSON snapshots of its
+// state (debounced) and reloads them at construction: QUEUED jobs resume,
+// RUNNING jobs are re-queued (they were in-flight when the process died).
+const QUEUE_PERSIST_PATH = process.env.QUEUE_PERSIST_PATH || '';
+const PERSIST_FLUSH_MS = parseInt(process.env.QUEUE_PERSIST_FLUSH_MS || '250', 10);
+const CLOSE_DRAIN_TIMEOUT_MS = parseInt(process.env.QUEUE_DRAIN_TIMEOUT_MS || '5000', 10);
 
 // Completed/failed jobs are kept for status inspection (getStats, getStatus)
 // but must not accumulate forever: the billing/sync/cacheWarm schedules add
@@ -30,7 +41,7 @@ const Priority = {
 };
 
 class JobQueue extends EventEmitter {
-  constructor() {
+  constructor(options = {}) {
     super();
     this.jobs = new Map(); // jobId -> job object
     this.queuedJobs = []; // array of jobIds sorted by priority
@@ -38,6 +49,13 @@ class JobQueue extends EventEmitter {
     this.handlers = new Map(); // job type -> handler function
     this.activeCount = 0;
     this.isProcessing = false;
+
+    // Durability: optional snapshot file (see QUEUE_PERSIST_PATH above).
+    // Instances may override the path so tests can use isolated files.
+    this.persistPath =
+      options.persistPath !== undefined ? options.persistPath : QUEUE_PERSIST_PATH;
+    this._persistTimer = null;
+    this._loadPersisted();
   }
 
   /**
@@ -72,6 +90,7 @@ class JobQueue extends EventEmitter {
       attempts: 0,
       maxAttempts: options.maxAttempts || JOB_RETRY_ATTEMPTS,
       delay: options.delay || 0,
+      runAt: null,
       createdAt: new Date(),
       startedAt: null,
       completedAt: null,
@@ -81,6 +100,11 @@ class JobQueue extends EventEmitter {
     };
 
     this.jobs.set(jobId, job);
+    if (job.delay > 0) {
+      // Absolute deadline so a restart can re-arm the remaining delay.
+      job.runAt = Date.now() + job.delay;
+    }
+    this._schedulePersist();
 
     if (job.delay > 0) {
       // Schedule for delayed execution
@@ -179,6 +203,7 @@ class JobQueue extends EventEmitter {
 
     job.status = JobStatus.CANCELLED;
     this._removeFromQueue(jobId);
+    this._schedulePersist();
     this.emit('cancelled', job);
     log.info({ jobId }, 'Job cancelled');
 
@@ -321,6 +346,7 @@ class JobQueue extends EventEmitter {
       job.status = JobStatus.FAILED;
       job.error = `No handler registered for job type "${job.type}"`;
       job.failedAt = new Date();
+      this._schedulePersist();
       this.emit('failed', job);
       log.error({ jobId: job.id, type: job.type }, job.error);
       this._process();
@@ -331,6 +357,9 @@ class JobQueue extends EventEmitter {
     job.startedAt = new Date();
     this.activeCount++;
     this.runningJobs.add(job.id);
+    // Snapshot the RUNNING state: if the process dies mid-run, recovery
+    // sees RUNNING in the file and re-queues the job instead of losing it.
+    this._schedulePersist();
     this.emit('started', job);
     log.info({ jobId: job.id, type: job.type }, 'Job started');
 
@@ -343,6 +372,7 @@ class JobQueue extends EventEmitter {
       this.activeCount--;
       this.runningJobs.delete(job.id);
       this._evictOldTerminalJobs();
+      this._schedulePersist();
       this.emit('completed', job);
       log.info({ jobId: job.id, type: job.type }, 'Job completed');
     } catch (error) {
@@ -356,7 +386,8 @@ class JobQueue extends EventEmitter {
         job.startedAt = null;
         this.activeCount--;
         this.runningJobs.delete(job.id);
-        
+        this._schedulePersist();
+
         setTimeout(() => {
           this._enqueue(job.id);
         }, backoffDelay);
@@ -376,6 +407,7 @@ class JobQueue extends EventEmitter {
         this.activeCount--;
         this.runningJobs.delete(job.id);
         this._evictOldTerminalJobs();
+        this._schedulePersist();
         this.emit('failed', job);
         log.error({ 
           jobId: job.id, 
@@ -414,18 +446,159 @@ class JobQueue extends EventEmitter {
         this.jobs.delete(id);
       }
     }
+    this._schedulePersist();
   }
 
   /**
-   * Close the queue and cleanup
+   * Close the queue and cleanup.
+   *
+   * Waits briefly for in-flight jobs to finish (bounded by
+   * QUEUE_DRAIN_TIMEOUT_MS), then flushes a final snapshot BEFORE clearing
+   * memory so queued jobs survive a graceful restart. Jobs still running at
+   * deadline are safe regardless: recovery re-queues RUNNING on next boot.
    */
   async close() {
     await this.stop();
+
+    const deadline = Date.now() + CLOSE_DRAIN_TIMEOUT_MS;
+    while (this.activeCount > 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    if (this.activeCount > 0) {
+      log.warn(
+        { activeCount: this.activeCount },
+        'Queue close drain timeout; in-flight jobs will be re-queued on next start'
+      );
+    }
+
+    this._persistNow();
     this.jobs.clear();
     this.queuedJobs = [];
     this.runningJobs.clear();
     this.handlers.clear();
+    if (this._persistTimer) {
+      clearTimeout(this._persistTimer);
+      this._persistTimer = null;
+    }
     log.info('Queue closed');
+  }
+
+  /**
+   * Snapshot the full queue state for persistence.
+   * @returns {Object} JSON-serialisable state
+   */
+  _snapshotState() {
+    return {
+      version: 1,
+      savedAt: new Date().toISOString(),
+      jobs: Array.from(this.jobs.values()).map((job) => ({ ...job })),
+      queueOrder: [...this.queuedJobs],
+    };
+  }
+
+  /**
+   * Debounced snapshot write. Coalesces bursts of state changes (bulk adds,
+   * batch completions) into one disk write per flush window.
+   */
+  _schedulePersist() {
+    if (!this.persistPath || this._persistTimer) {
+      return;
+    }
+    this._persistTimer = setTimeout(() => {
+      this._persistTimer = null;
+      this._persistNow();
+    }, PERSIST_FLUSH_MS);
+    // Never hold the event loop open for a metrics-style side effect.
+    if (typeof this._persistTimer.unref === 'function') {
+      this._persistTimer.unref();
+    }
+  }
+
+  /**
+   * Write the snapshot atomically: temp file + rename, so a crash mid-write
+   * can never leave a truncated queue file behind.
+   */
+  _persistNow() {
+    if (!this.persistPath) {
+      return;
+    }
+    try {
+      fs.mkdirSync(path.dirname(this.persistPath), { recursive: true });
+      const tmp = `${this.persistPath}.tmp`;
+      fs.writeFileSync(tmp, JSON.stringify(this._snapshotState()));
+      fs.renameSync(tmp, this.persistPath);
+    } catch (err) {
+      log.error({ error: err.message, path: this.persistPath }, 'Failed to persist queue state');
+    }
+  }
+
+  /**
+   * Load a snapshot at construction. QUEUED jobs resume where they left off;
+   * RUNNING jobs are re-queued (they were in-flight when the process died,
+   * so their outcome is unknown and handlers are expected to be idempotent).
+   * Delayed jobs re-arm their remaining delay from the persisted runAt.
+   */
+  _loadPersisted() {
+    if (!this.persistPath) {
+      return;
+    }
+    let raw;
+    try {
+      raw = fs.readFileSync(this.persistPath, 'utf8');
+    } catch {
+      return; // No snapshot yet - normal first boot.
+    }
+
+    let state;
+    try {
+      state = JSON.parse(raw);
+    } catch (err) {
+      log.error({ error: err.message }, 'Queue snapshot is corrupt; starting empty');
+      return;
+    }
+    if (!state || !Array.isArray(state.jobs)) {
+      return;
+    }
+
+    for (const job of state.jobs) {
+      if (job.status === JobStatus.RUNNING) {
+        job.status = JobStatus.QUEUED;
+        job.startedAt = null;
+      }
+      this.jobs.set(job.id, job);
+    }
+
+    // Restore saved queue order, keeping priority interleaving intact.
+    this.queuedJobs = (state.queueOrder || []).filter((id) => {
+      const job = this.jobs.get(id);
+      return job && job.status === JobStatus.QUEUED;
+    });
+
+    // Queued jobs missing from the saved order are delayed jobs: re-arm the
+    // remaining wait, or enqueue immediately if the deadline already passed.
+    for (const job of this.jobs.values()) {
+      if (job.status !== JobStatus.QUEUED || this.queuedJobs.includes(job.id)) {
+        continue;
+      }
+      const remaining = job.runAt ? job.runAt - Date.now() : 0;
+      if (remaining > 0) {
+        setTimeout(() => {
+          const current = this.jobs.get(job.id);
+          if (current && current.status === JobStatus.QUEUED) {
+            this._enqueue(job.id);
+          }
+        }, remaining);
+      } else {
+        this.queuedJobs.push(job.id);
+      }
+    }
+
+    if (this.queuedJobs.length > 0) {
+      log.info(
+        { recovered: this.queuedJobs.length, path: this.persistPath },
+        'Recovered queued jobs from persistent snapshot'
+      );
+    }
   }
 }
 
@@ -434,6 +607,7 @@ const queue = new JobQueue();
 
 module.exports = {
   queue,
+  JobQueue,
   JobStatus,
   Priority,
 };

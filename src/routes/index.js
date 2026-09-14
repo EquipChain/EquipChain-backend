@@ -109,4 +109,60 @@ router.get('/health', (req, res) => {
   res.json(healthData);
 });
 
+/**
+ * @openapi
+ * /health/live:
+ *   get:
+ *     summary: Liveness probe
+ *     description: |
+ *       Process is up and able to serve requests. Deliberately dependency-free:
+ *       if this fails, the container should be restarted, so it must not fail
+ *       just because Redis is down.
+ *     tags: [System]
+ *     responses:
+ *       200: { description: Process alive }
+ */
+router.get('/health/live', (req, res) => {
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+/**
+ * @openapi
+ * /health/ready:
+ *   get:
+ *     summary: Readiness probe
+ *     description: |
+ *       Checks whether the service can handle traffic: services initialized
+ *       and cache reachable. Unlike liveness, failure here should remove the
+ *       instance from load-balancer rotation without restarting it.
+ *     tags: [System]
+ *     responses:
+ *       200: { description: Ready to serve traffic }
+ *       503: { description: Not ready - dependencies unavailable }
+ */
+router.get('/health/ready', async (req, res) => {
+  const checks = {};
+  let ready = true;
+
+  // Services initialized?
+  checks.servicesInitialized = Boolean(services.scheduler || services.queue);
+  if (!checks.servicesInitialized) ready = false;
+
+  // Cache reachable? (memory fallback counts as available)
+  try {
+    const { cacheService } = require('../services/cache');
+    checks.cache = cacheService.isConnected() ? 'ok' : 'unavailable';
+    if (!cacheService.isConnected()) ready = false;
+  } catch {
+    checks.cache = 'unavailable';
+    ready = false;
+  }
+
+  res.status(ready ? 200 : 503).json({
+    status: ready ? 'ready' : 'not_ready',
+    checks,
+    timestamp: new Date().toISOString(),
+  });
+});
+
 module.exports = router;

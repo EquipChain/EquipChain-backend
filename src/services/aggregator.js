@@ -89,6 +89,26 @@ function generateId() {
 const MAX_BATCH_SIZE = 10000;
 
 /**
+ * Global cap on stored readings. Even with batch-size limits, repeated
+ * ingests grow the store forever - the retention sweeper only removes data
+ * older than the retention window, so a high-frequency fleet ingesting
+ * within the window would still expand until the heap gave out. At the cap,
+ * the OLDEST readings (by timestamp) are dropped: retention and the global
+ * cap express the same policy - keep the most recent window of data.
+ */
+// Resolved lazily (memoised) so tests and operators can tune it without a
+// restart. A cap smaller than one batch is legitimate (evict-as-you-go), so
+// the only floor is >= 1; invalid values fall back to the 500k default.
+let _maxTotalReadings;
+function maxTotalReadings() {
+  if (_maxTotalReadings === undefined) {
+    const parsed = parseInt(process.env.MAX_TOTAL_READINGS || '500000', 10);
+    _maxTotalReadings = Number.isFinite(parsed) && parsed >= 1 ? parsed : 500000;
+  }
+  return _maxTotalReadings;
+}
+
+/**
  * Add one or more readings to the in-memory store.
  * @param {Array|Object} data - Single reading or array of readings
  * @returns {Array} The stored reading(s)
@@ -115,6 +135,25 @@ function addReadings(data) {
     createdAt: item.createdAt || new Date().toISOString(),
   }));
   readings.push(...stored);
+
+  // Global cap: drop the oldest readings when the store exceeds its budget.
+  // Oldest = smallest timestamp; a sort of the overflow region only, and
+  // amortized (runs only when the cap is crossed).
+  const cap = maxTotalReadings();
+  if (readings.length > cap) {
+    const overflow = readings.length - cap;
+    const oldest = readings
+      .slice()
+      .sort((a, b) => a.timestamp - b.timestamp)
+      .slice(0, overflow);
+    const evictIds = new Set(oldest.map((r) => r.id));
+    readings = readings.filter((r) => !evictIds.has(r.id));
+    const { childLogger: capLogger } = require('../config/logger');
+    capLogger('aggregator').warn(
+      { evicted: overflow, remaining: readings.length, cap },
+      'Reading store at cap; evicted oldest readings'
+    );
+  }
 
   // Broadcast new readings to real-time WebSocket subscribers. Batch shape
   // mirrors the ingest: single reading -> single event, batch -> one
@@ -519,6 +558,7 @@ module.exports = {
   startRetentionSweeper,
   stopRetentionSweeper,
   RETENTION_MS,
+  MAX_TOTAL_READINGS: maxTotalReadings(),
   // Aggregation
   aggregateReadings,
   fleetSummary,

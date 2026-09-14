@@ -3,6 +3,8 @@ const router = express.Router();
 const { handleExport } = require('../services/exporter');
 const { childLogger } = require('../config/logger');
 const { validate } = require('../middleware/validate');
+const { authenticate } = require('../middleware/auth');
+const { requireAdmin } = require('../middleware/requireAdmin');
 const {
   exportReadingsQuerySchema,
   exportAnalyticsParamsSchema,
@@ -145,37 +147,20 @@ const AVAILABLE_FIELDS = {
 };
 
 /**
- * Authentication middleware placeholder
- * In production, this would verify JWT tokens or API keys
+ * Authentication is enforced by the shared JWT middleware (src/middleware/auth.js):
+ * requests must carry a valid `Authorization: Bearer <jwt>` signed with JWT_SECRET.
+ * The previous placeholder accepted ANY Bearer token, which made every export
+ * endpoint - including the admin-only system report - effectively public.
+ *
+ * @openapi security is documented per-route via bearerAuth.
  */
-function authenticate(req, res, next) {
-  const authHeader = req.headers.authorization;
-  
-  if (!authHeader) {
-    return res.status(401).json({ error: 'Unauthorized', message: 'Authentication required' });
-  }
-
-  // TODO: Implement actual JWT/API key verification
-  // For now, we'll accept any Bearer token
-  if (authHeader.startsWith('Bearer ')) {
-    next();
-  } else {
-    res.status(401).json({ error: 'Unauthorized', message: 'Invalid authentication format' });
-  }
-}
 
 /**
- * Admin authorization middleware placeholder
+ * Admin authorization is enforced by the shared requireAdmin middleware
+ * (src/middleware/requireAdmin.js), which checks the admin role from the
+ * verified JWT payload. The previous placeholder trusted a client-controlled
+ * `x-role: admin` header, letting anyone promote themselves to admin.
  */
-function requireAdmin(req, res, next) {
-  // TODO: Implement actual admin role verification
-  // For now, we'll check for a custom header
-  if (req.headers['x-role'] === 'admin') {
-    next();
-  } else {
-    res.status(403).json({ error: 'Forbidden', message: 'Admin access required' });
-  }
-}
 
 /**
  * @openapi

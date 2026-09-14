@@ -1,112 +1,134 @@
+'use strict';
+
+// src/jobs/cacheWarm.job.js
+//
+// Cache-warm handler for the job queue. Pre-computes and caches the exact
+// payloads the analytics endpoints serve, so the first real request after a
+// cache flush or deploy is warm instead of cold.
+//
+// Replaces the placeholder that cached fabricated objects (random values,
+// random block heights) under keys nothing ever read.
+
 const { childLogger } = require('../config/logger');
+const {
+  getReadings,
+  aggregateReadings,
+  fleetSummary,
+} = require('../services/aggregator');
 const { cacheService } = require('../services/cache');
 
 const log = childLogger('job:cacheWarm');
 
+// TTLs mirror how stale each payload may be before it is worse than cold.
+const TTL_SECONDS = {
+  fleetSummary: 600, // 10 min
+  daily: 3600, // 1 h
+  contractState: 300, // 5 min
+};
+
 /**
- * Cache warm job handler
- * Warms cache for frequently accessed data by pre-fetching blockchain/Soroban data
+ * Warm the fleet summary cache - the payload /api/analytics/fleet-summary
+ * computes from the same inputs.
+ */
+async function warmFleetSummary() {
+  const today = new Date().toISOString().slice(0, 10);
+  const readings = getReadings({ startDate: today, endDate: today });
+  const summary = fleetSummary(readings, { startDate: today, endDate: today, aggregationType: 'avg' });
+
+  const key = 'analytics:fleet-summary:today';
+  await cacheService.set(key, summary, TTL_SECONDS.fleetSummary);
+  return key;
+}
+
+/**
+ * Warm daily aggregation buckets for the recent window.
+ */
+async function warmDailyAggregates(days = 7) {
+  const keysWarmed = [];
+  const end = new Date();
+
+  for (let i = 0; i < days; i++) {
+    const d = new Date(end);
+    d.setUTCDate(end.getUTCDate() - i);
+    const date = d.toISOString().slice(0, 10);
+
+    const readings = getReadings({ startDate: date, endDate: date });
+    const buckets = aggregateReadings(readings, {
+      startDate: date,
+      endDate: date,
+      granularity: 'day',
+      aggregationType: 'sum',
+    });
+
+    const key = `analytics:daily:${date}`;
+    await cacheService.set(key, buckets, TTL_SECONDS.daily);
+    keysWarmed.push(key);
+  }
+  return keysWarmed;
+}
+
+/**
+ * Warm the contract-state cache from the most recent readings snapshot.
+ * (Soroban sync will replace this source when the chain integration lands;
+ * until then the shape matches what the sync job writes.)
+ */
+async function warmContractState() {
+  const state = {
+    totalMeters: new Set(getReadings().map((r) => r.meterId)).size,
+    lastSync: new Date().toISOString(),
+    source: 'readings-store',
+  };
+
+  const key = 'contract:state:latest';
+  await cacheService.set(key, state, TTL_SECONDS.contractState);
+  return key;
+}
+
+/**
+ * Cache warm job handler.
  *
  * @param {Object} data - Job data
- * @param {string} data.cacheType - Type of cache to warm ('meter_data', 'contract_state', 'fleet_summary')
- * @param {Array<string>} data.keys - Specific cache keys to warm (optional)
- * @returns {Object} Cache warming results
+ * @param {string} [data.cacheType] - 'meter_data' | 'contract_state' | 'fleet_summary' | 'all'
+ * @param {number} [data.days] - Days of daily aggregates to warm (default 7)
+ * @returns {Object} Warming results
  */
-async function cacheWarmHandler(data) {
-  const { cacheType, keys } = data;
-
-  log.info({ cacheType, keys }, 'Starting cache warm job');
-
-  let keysWarmed = 0;
+async function cacheWarmHandler(data = {}) {
+  const { cacheType = 'all', days = 7 } = data;
   const warmedKeys = [];
 
-  switch (cacheType) {
-    case 'meter_data': {
-      // Warm recent meter readings cache
-      const meterIds = ['METER-001', 'METER-002', 'METER-003'];
-      const now = Date.now();
-      const oneDayAgo = now - 24 * 60 * 60 * 1000;
-      const key = `readings:${meterIds.join(',')}:${oneDayAgo}:${now}`;
+  const targets =
+    cacheType === 'all'
+      ? ['fleet_summary', 'meter_data', 'contract_state']
+      : [cacheType];
 
-      // Simulate fetching from Soroban/blockchain
-      const readings = meterIds.map((meterId, idx) => ({
-        meterId,
-        timestamp: now - idx * 3600000,
-        value: 100 + Math.random() * 50,
-        unit: 'kWh',
-      }));
-
-      await cacheService.set(key, readings, 1800); // 30 min TTL
-      warmedKeys.push(key);
-      keysWarmed++;
-      break;
-    }
-
-    case 'contract_state': {
-      // Warm contract state cache
-      const contractKey = 'contract:state:latest';
-      const contractState = {
-        totalMeters: 3,
-        activeMeters: 2,
-        lastSync: new Date().toISOString(),
-        blockHeight: Math.floor(Math.random() * 100000),
-      };
-
-      await cacheService.set(contractKey, contractState, 300); // 5 min TTL
-      warmedKeys.push(contractKey);
-      keysWarmed++;
-      break;
-    }
-
-    case 'fleet_summary': {
-      // Warm fleet summary analytics cache
-      const summaryKey = 'analytics:fleet:latest';
-      const fleetSummary = {
-        totalReadings: Math.floor(Math.random() * 10000),
-        totalMeters: 3,
-        averageConsumption: (100 + Math.random() * 50).toFixed(2),
-        peakConsumption: (150 + Math.random() * 50).toFixed(2),
-        lastUpdated: new Date().toISOString(),
-      };
-
-      await cacheService.set(summaryKey, fleetSummary, 600); // 10 min TTL
-      warmedKeys.push(summaryKey);
-      keysWarmed++;
-      break;
-    }
-
-    default: {
-      // Warm all known cache types
-      log.warn({ cacheType }, 'Unknown cache type, warming all');
-      await cacheWarmHandler({ cacheType: 'meter_data' });
-      await cacheWarmHandler({ cacheType: 'contract_state' });
-      await cacheWarmHandler({ cacheType: 'fleet_summary' });
-      return { cacheType: 'all', keysWarmed: 3, warmedAt: new Date().toISOString() };
-    }
-  }
-
-  // If specific keys were requested, warm those too
-  if (keys && keys.length > 0) {
-    for (const key of keys) {
-      const data = { warmedAt: new Date().toISOString() };
-      await cacheService.set(key, data, 1800);
-      warmedKeys.push(key);
-      keysWarmed++;
+  for (const target of targets) {
+    switch (target) {
+      case 'fleet_summary':
+        warmedKeys.push(await warmFleetSummary());
+        break;
+      case 'meter_data':
+        warmedKeys.push(...(await warmDailyAggregates(days)));
+        break;
+      case 'contract_state':
+        warmedKeys.push(await warmContractState());
+        break;
+      default:
+        throw new Error(
+          `Unknown cacheType "${target}". Expected fleet_summary, meter_data, contract_state or all`
+        );
     }
   }
 
   const stats = await cacheService.getStats();
-  const result = {
+  log.info({ cacheType, keysWarmed: warmedKeys.length }, 'Cache warm completed');
+
+  return {
     cacheType,
-    keysWarmed,
+    keysWarmed: warmedKeys.length,
     warmedKeys,
     cacheStats: stats,
     warmedAt: new Date().toISOString(),
   };
-
-  log.info({ result }, 'Cache warm job completed');
-
-  return result;
 }
 
 module.exports = cacheWarmHandler;

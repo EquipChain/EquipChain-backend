@@ -7,9 +7,19 @@ const {
   adminUpdateUserRolesSchema,
   adminIdParamSchema,
 } = require('../../schemas/validation.schema');
-const { paginate } = require('../../lib/pagination');
+const { paginateList } = require('../../utils/pagination');
 
 const router = express.Router();
+
+// Shared list options: keep the whitelist in one place so the schema-level
+// sortable/filterset and the utility-level enforcement cannot drift apart.
+const USER_LIST_OPTIONS = {
+  allowedFilters: ['role', 'status'],
+  searchableFields: ['email', 'name'],
+  sortableFields: ['email', 'name', 'role', 'status', 'createdAt'],
+  defaultSort: { field: 'createdAt', order: 'desc' },
+  dateField: 'createdAt',
+};
 
 /**
  * @openapi
@@ -30,8 +40,15 @@ const router = express.Router();
  *       401: { description: Authentication required }
  *       403: { description: Admin role required }
  */
-router.get('/', (req, res) => {
-  res.json(paginate(userStore.list(), req));
+router.get('/', (req, res, next) => {
+  try {
+    // paginateList supports ?paginate=offset (default) and ?paginate=cursor,
+    // validates page/limit/sort against the whitelist, and throws
+    // ValidationError (400) for bad input instead of silently mis-paging.
+    res.json(paginateList(userStore.list(), req.query, USER_LIST_OPTIONS));
+  } catch (err) {
+    next(err);
+  }
 });
 
 /**

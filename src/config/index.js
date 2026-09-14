@@ -24,6 +24,7 @@ const {
   REDIS_URL = 'redis://localhost:6379',
   JWT_SECRET = '',
   JWT_EXPIRES_IN = '1h',
+  METRICS_TOKEN = '',
 } = process.env;
 
 const isProduction = NODE_ENV === 'production';
@@ -83,7 +84,6 @@ if (!JWT_SECRET || JWT_SECRET.trim().length < 32) {
   }
   if (!isTest) {
     // Development convenience only - loudly flagged, never in production.
-    // eslint-disable-next-line no-console
     console.warn(
       '[config] JWT_SECRET not set or shorter than 32 chars; using an ephemeral ' +
         'development secret. Tokens will invalidate on every restart.'
@@ -106,6 +106,7 @@ const config = Object.freeze({
   corsOrigins,
   redisUrl: REDIS_URL,
   jwtSecret: effectiveJwtSecret,
+  metricsToken: METRICS_TOKEN || undefined,
   jwtExpiresIn: JWT_EXPIRES_IN,
   jobs: Object.freeze({
     concurrency: toInt(JOB_CONCURRENCY, 5),

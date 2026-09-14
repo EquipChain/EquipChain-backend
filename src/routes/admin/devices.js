@@ -7,9 +7,17 @@ const {
   adminUpdateDeviceSchema,
   adminIdParamSchema,
 } = require('../../schemas/validation.schema');
-const { paginate } = require('../../lib/pagination');
+const { paginateList } = require('../../utils/pagination');
 
 const router = express.Router();
+
+const DEVICE_LIST_OPTIONS = {
+  allowedFilters: ['type', 'status', 'location'],
+  searchableFields: ['name', 'meterId', 'location'],
+  sortableFields: ['meterId', 'name', 'type', 'status', 'createdAt'],
+  defaultSort: { field: 'createdAt', order: 'desc' },
+  dateField: 'createdAt',
+};
 
 /**
  * @openapi
@@ -47,8 +55,12 @@ router.post('/', validate(adminRegisterDeviceSchema), (req, res) => {
  *     responses:
  *       200: { description: Paginated list of devices }
  */
-router.get('/', (req, res) => {
-  res.json(paginate(deviceStore.list(), req));
+router.get('/', (req, res, next) => {
+  try {
+    res.json(paginateList(deviceStore.list(), req.query, DEVICE_LIST_OPTIONS));
+  } catch (err) {
+    next(err);
+  }
 });
 
 /**

@@ -30,6 +30,7 @@ const { childLogger } = require('./config/logger');
 const config = require('./config');
 const routes = require('./routes');
 const { rateLimiter } = require('./middleware/rateLimiter');
+const { metricsMiddleware, renderMetrics } = require('./middleware/metrics');
 const { validate } = require('./middleware/validate');
 const { authChallengeSchema } = require('./schemas/validation.schema');
 const { sanitizeForLogging, sanitize } = require('./utils/sanitize');
@@ -37,6 +38,28 @@ const { sanitizeForLogging, sanitize } = require('./utils/sanitize');
 const app = express();
 const log = childLogger('http');
 app.disable('x-powered-by');
+
+// ─── Metrics ─────────────────────────────────────────────────────────────────
+
+// Mounted first so durations cover every downstream middleware (security,
+// parsing, rate limiting, routing). The route label is taken at response
+// time, when req.route is populated, keeping label cardinality bounded.
+app.use(metricsMiddleware);
+
+// Prometheus scrape endpoint. Open by default (cluster-internal convention);
+// set METRICS_TOKEN to require `Authorization: Bearer <token>` from scrapers
+// when the port is exposed more broadly.
+app.get('/metrics', (req, res) => {
+  if (config.metricsToken) {
+    const header = req.headers.authorization || '';
+    const [scheme, token] = header.split(' ');
+    if (scheme !== 'Bearer' || token !== config.metricsToken) {
+      return res.status(401).json({ error: 'Authentication required.' });
+    }
+  }
+  res.setHeader('Content-Type', 'text/plain; version=0.0.4; charset=utf-8');
+  res.end(renderMetrics());
+});
 
 // ─── Security & parsing ──────────────────────────────────────────────────────
 

@@ -46,7 +46,7 @@ function buildOpenApiSpec() {
       },
       security: [{ bearerAuth: [] }],
     },
-    apis: [path.join(__dirname, '..', '**', '*.js').replace(/\\/g, '/')],
+    apis: [path.join(__dirname, '..', '**', '*.js').split('\\').join('/')],
   });
 }
 

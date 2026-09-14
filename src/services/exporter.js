@@ -89,7 +89,7 @@ function validateFields(requestedFields, availableFields) {
 function filterFields(obj, fields) {
   const filtered = {};
   fields.forEach(field => {
-    if (obj.hasOwnProperty(field)) {
+    if (Object.prototype.hasOwnProperty.call(obj, field)) {
       filtered[field] = obj[field];
     }
   });

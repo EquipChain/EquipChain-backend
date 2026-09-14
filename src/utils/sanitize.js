@@ -68,7 +68,10 @@ function removeControlChars(str) {
   if (typeof str !== 'string') {
     return str;
   }
-  // Remove control characters except newline, tab, and carriage return
+  // Remove control characters except newline, tab, and carriage return.
+  // The control-char class is deliberate here (log-injection defense), so
+  // the no-control-regex lint rule is disabled for this line only.
+  // eslint-disable-next-line no-control-regex
   return str.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
 }
 

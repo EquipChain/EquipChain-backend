@@ -57,7 +57,6 @@ function seedReadings() {
   startDate.setUTCDate(startDate.getUTCDate() - 90);
   startDate.setUTCHours(0, 0, 0, 0);
 
-  const totalReadings = 90 * METERS.length * 24; // ~6480 readings
   const batch = [];
 
   for (let day = 0; day < 90; day++) {
@@ -85,7 +84,6 @@ function seedReadings() {
 
 // Run directly
 if (require.main === module) {
-  const before = readingCount();
   const count = seedReadings();
   console.log(`Seeded ${count} readings across ${METERS.length} meters.`);
   console.log(`Total readings in store: ${readingCount()}`);

@@ -20,7 +20,15 @@ const COMPARISON_MODES = ['previous_period', 'year_over_year'];
  * IANA timezone regex — matches common timezone identifiers like
  * "America/New_York", "Europe/London", "UTC", "Asia/Tokyo", etc.
  */
-const IANA_TIMEZONE_REGEX = /^[A-Za-z_]+(\/[A-Za-z_]+)*$/;
+// IANA timezone identifiers: segments of letters/underscores separated by
+// slashes (e.g. "America/New_York", "Europe/London", "UTC", "Asia/Tokyo").
+// Linear-time by construction: the repeated group contains exactly one
+// character class and one literal separator, with no nested quantifiers,
+// so backtracking is bounded. The security plugin's heuristic flags any
+// quantified group regardless; suppressed with rationale rather than
+// weakening the rule project-wide.
+// eslint-disable-next-line security/detect-unsafe-regex
+const IANA_TIMEZONE_REGEX = /^[A-Za-z_]+(?:\/[A-Za-z_]+)*$/;
 
 /**
  * Schema for querying daily summaries.

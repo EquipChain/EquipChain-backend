@@ -3,12 +3,7 @@ const { z } = require('zod');
 /**
  * Common validation patterns
  */
-const uuidSchema = z.string().uuid();
 const idParamSchema = z.object({ id: z.string().min(1) });
-const dateSchema = z.string().refine(
-  (val) => !isNaN(Date.parse(val)),
-  { message: 'Must be a valid ISO 8601 date' }
-);
 
 /**
  * Auth schemas
@@ -17,10 +12,6 @@ const authChallengeSchema = {
   body: z.object({
     wallet: z.string().min(1).optional(),
   }),
-};
-
-const protectedQuerySchema = {
-  query: z.object({}).passthrough(),
 };
 
 /**

@@ -1,5 +1,5 @@
 const { childLogger } = require('../config/logger');
-const { queue, Priority } = require('./queue');
+const { queue } = require('./queue');
 const { scheduler } = require('./scheduler');
 const { cacheService } = require('./cache');
 const billingHandler = require('../jobs/billing.job');

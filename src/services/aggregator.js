@@ -108,7 +108,7 @@ function addReadings(data) {
     } else {
       websocket.broadcastMeterReadingsBatch(stored);
     }
-  } catch (err) {
+  } catch {
     // Broadcasting is best-effort; never block ingestion on WS failures.
   }
 

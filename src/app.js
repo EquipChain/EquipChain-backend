@@ -42,7 +42,34 @@ app.disable('x-powered-by');
 
 // ─── Security & parsing ──────────────────────────────────────────────────────
 
-app.use(helmet());
+app.use(
+  helmet({
+    // This service serves JSON APIs and Swagger UI; it does not serve
+    // arbitrary HTML, so a strict CSP costs nothing and defends in depth
+    // against any future HTML-rendering regression (e.g. an error page
+    // reflecting user input).
+    contentSecurityPolicy: {
+      useDefaults: true,
+      directives: {
+        'default-src': ["'self'"],
+        'script-src': ["'self'"],
+        'style-src': ["'self'", "'unsafe-inline'"], // swagger-ui injects inline styles
+        'img-src': ["'self'", 'data:'],
+        'connect-src': ["'self'"],
+        'object-src': ["'none'"],
+        'frame-ancestors': ["'none'"],
+      },
+    },
+    // HSTS only matters over TLS; harmless locally, correct behind a TLS
+    // terminating proxy in production.
+    strictTransportSecurity: { maxAge: 15552000, includeSubDomains: true },
+    // APIs are consumed cross-origin by the dashboard via fetch/XHR, which
+    // is not subject to frame-ancestors; keep the default DENY framing.
+    frameguard: { action: 'deny' },
+    referrerPolicy: { policy: 'no-referrer' },
+    crossOriginResourcePolicy: { policy: 'same-site' },
+  })
+);
 app.use(
   cors({
     origin: config.corsOrigins,

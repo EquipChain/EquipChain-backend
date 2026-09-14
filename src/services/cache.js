@@ -15,6 +15,15 @@ const log = childLogger('cache');
 const memoryStore = new Map();
 
 // ---------------------------------------------------------------------------
+// Stampede protection
+// ---------------------------------------------------------------------------
+// In-flight getOrSet promises keyed by cache key. When N concurrent requests
+// miss the same key, all N share one load() execution instead of N loads
+// hammering the backing store (classic thundering-herd on a hot key after a
+// deploy or TTL expiry).
+const inFlightGets = new Map();
+
+// ---------------------------------------------------------------------------
 // CacheService
 // ---------------------------------------------------------------------------
 class CacheService {
@@ -210,6 +219,47 @@ class CacheService {
     } catch (err) {
       log.error({ error: err.message }, 'Cache flush error');
     }
+  }
+
+  /**
+   * Cache-aside with stampede protection: many concurrent callers asking for
+   * the same missing key trigger exactly one load(); every caller receives
+   * the same resolved value (or the same rejection - a failed load is not
+   * cached, so the next request retries).
+   *
+   * @param {string} key
+   * @param {number} [ttl] - TTL in seconds when storing the loaded value
+   * @param {() => Promise<any>} load - miss handler producing the value
+   * @returns {Promise<any>}
+   */
+  async getOrSet(key, ttl, load) {
+    const cached = await this.get(key);
+    if (cached !== null && cached !== undefined) {
+      return cached;
+    }
+
+    const existing = inFlightGets.get(key);
+    if (existing) {
+      return existing.promise;
+    }
+
+    const promise = (async () => {
+      try {
+        const value = await load();
+        // Only cache defined values: a null/undefined result (e.g. entity
+        // not found) is intentionally not stored so negative results never
+        // outlive the request that produced them.
+        if (value !== null && value !== undefined) {
+          await this.set(key, value, ttl);
+        }
+        return value;
+      } finally {
+        inFlightGets.delete(key);
+      }
+    })();
+
+    inFlightGets.set(key, { promise });
+    return promise;
   }
 
   /**

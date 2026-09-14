@@ -36,9 +36,52 @@ const log = childLogger('rate-limiter');
  */
 const _store = new Map();
 
+/**
+ * Upper bound on tracked counter entries. Without it, an attacker who
+ * randomizes per-request identity fields (spoofed x-forwarded-for behind a
+ * trusting proxy, or high-cardinality API keys) mints a fresh Map entry per
+ * request and grows the store without limit - a memory-exhaustion DoS on a
+ * single-instance deployment. When the cap is hit, expired entries are
+ * dropped first, then the soonest-to-expire; worst case under attack, some
+ * clients briefly share a window, which is strictly better than OOM.
+ */
+const MAX_TRACKED_KEYS = parseInt(process.env.RATE_LIMIT_MAX_KEYS || '100000', 10);
+
 /** Wipe all counters. Useful in tests. */
 function _resetStore() {
   _store.clear();
+}
+
+/**
+ * Evict entries when the store grows past MAX_TRACKED_KEYS.
+ * Amortized: only runs when a NEW key is created and the threshold is
+ * crossed, not on every request.
+ */
+function _enforceStoreCap() {
+  if (_store.size <= MAX_TRACKED_KEYS) {
+    return;
+  }
+
+  const now = Date.now();
+  // Drop expired entries first - they are pure garbage.
+  for (const [key, entry] of _store) {
+    if (now >= entry.resetAt) {
+      _store.delete(key);
+    }
+  }
+
+  // Still over? Evict soonest-to-expire entries (they free up first anyway).
+  if (_store.size > MAX_TRACKED_KEYS) {
+    const byExpiry = [..._store.entries()].sort((a, b) => a[1].resetAt - b[1].resetAt);
+    const toEvict = _store.size - MAX_TRACKED_KEYS;
+    for (let i = 0; i < toEvict; i++) {
+      _store.delete(byExpiry[i][0]);
+    }
+    log.warn(
+      { evicted: toEvict, storeSize: _store.size, cap: MAX_TRACKED_KEYS },
+      'rate limit store cap reached; evicted soonest-to-expire counters'
+    );
+  }
 }
 
 // ─── Tier detection ───────────────────────────────────────────────────────────
@@ -115,6 +158,7 @@ function createRateLimiter(opts = {}) {
     if (!entry || now >= entry.resetAt) {
       entry = { count: 0, resetAt: now + windowMs };
       _store.set(key, entry);
+      _enforceStoreCap();
     }
 
     entry.count += 1;
@@ -164,7 +208,7 @@ function createRateLimiter(opts = {}) {
 /** Drop-in middleware applying tiered limits based on request identity. */
 const rateLimiter = createRateLimiter();
 
-// ─── Exports ─────────────────────────────────────────────────────────────────
+// ─── Exports ─────────────────────────────────────────────────────────────
 
 module.exports = {
   rateLimiter,
@@ -172,4 +216,6 @@ module.exports = {
   determineTier,
   _store,
   _resetStore,
+  _enforceStoreCap,
+  MAX_TRACKED_KEYS,
 };

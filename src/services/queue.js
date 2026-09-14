@@ -18,6 +18,15 @@ const QUEUE_PERSIST_PATH = process.env.QUEUE_PERSIST_PATH || '';
 const PERSIST_FLUSH_MS = parseInt(process.env.QUEUE_PERSIST_FLUSH_MS || '250', 10);
 const CLOSE_DRAIN_TIMEOUT_MS = parseInt(process.env.QUEUE_DRAIN_TIMEOUT_MS || '5000', 10);
 
+// Backpressure: hard cap on simultaneously QUEUED jobs. Every queued job
+// holds its payload in memory, so an ingest storm, a scheduler misfire, or
+// a wedged downstream (jobs completing slower than they arrive) otherwise
+// grows the queue until the process is OOM-killed - taking the API with it.
+// Exceeding the cap makes add() throw QueueOverflowError: producers (the
+// scheduler's tick, ingest handlers) see a loud failure instead of a silent
+// memory bleed, and their own retry/error paths decide what to do.
+const QUEUE_MAX_DEPTH = parseInt(process.env.QUEUE_MAX_DEPTH || '10000', 10);
+
 // Per-job wall-clock budget. A hung handler otherwise pins a concurrency
 // slot forever, slowly starving the queue. The timeout failure flows through
 // the normal retry ladder; handlers may accept an AbortSignal that fires on
@@ -39,6 +48,16 @@ const JobStatus = {
   FAILED: 'failed',
   CANCELLED: 'cancelled',
 };
+
+/** Thrown by add() when the queue is at its depth cap. */
+class QueueOverflowError extends Error {
+  constructor(maxDepth) {
+    super(`Queue is full: ${maxDepth} queued jobs (max depth reached)`);
+    this.name = 'QueueOverflowError';
+    this.code = 'QUEUE_FULL';
+    this.maxDepth = maxDepth;
+  }
+}
 
 // Priority levels
 const Priority = {
@@ -62,6 +81,9 @@ class JobQueue extends EventEmitter {
     this.persistPath =
       options.persistPath !== undefined ? options.persistPath : QUEUE_PERSIST_PATH;
     this._persistTimer = null;
+    this.maxDepth =
+      options.maxDepth !== undefined ? options.maxDepth : QUEUE_MAX_DEPTH;
+    this.rejectedCount = 0;
     this._loadPersisted();
   }
 
@@ -86,6 +108,15 @@ class JobQueue extends EventEmitter {
    * @returns {string} Job ID
    */
   add(type, data = {}, options = {}) {
+    if (this.queuedJobs.length >= this.maxDepth) {
+      this.rejectedCount++;
+      log.error(
+        { type, queued: this.queuedJobs.length, maxDepth: this.maxDepth },
+        'Job rejected: queue at max depth'
+      );
+      throw new QueueOverflowError(this.maxDepth);
+    }
+
     const jobId = `job_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
     
     const job = {
@@ -280,6 +311,8 @@ class JobQueue extends EventEmitter {
       total: this.jobs.size,
       activeCount: this.activeCount,
       maxConcurrency: JOB_CONCURRENCY,
+      maxDepth: this.maxDepth,
+      rejected: this.rejectedCount,
     };
   }
 
@@ -672,4 +705,5 @@ module.exports = {
   JobQueue,
   JobStatus,
   Priority,
+  QueueOverflowError,
 };

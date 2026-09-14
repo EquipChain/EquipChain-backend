@@ -4,7 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { JobQueue, JobStatus } = require('../src/services/queue');
+const { JobQueue, JobStatus, QueueOverflowError } = require('../src/services/queue');
 
 function tmpFile() {
   return path.join(os.tmpdir(), `queue-test-${Date.now()}-${Math.random().toString(36).slice(2)}.json`);
@@ -159,5 +159,43 @@ test('timeoutMs=0 disables the budget entirely', async () => {
 
   await new Promise((resolve) => q.once('completed', resolve));
   assert.strictEqual(q.getStatus(id).result, 'done');
+  await q.close();
+});
+
+test('add() rejects jobs beyond the depth cap with QueueOverflowError', () => {
+  const q = new JobQueue({ maxDepth: 3 });
+  const ids = [q.add('a', {}), q.add('b', {}), q.add('c', {})];
+  assert.strictEqual(q.queuedJobs.length, 3);
+
+  assert.throws(
+    () => q.add('d', {}),
+    (err) => err.name === 'QueueOverflowError' && err.code === 'QUEUE_FULL'
+  );
+  // Queue unchanged, rejection counted for observability.
+  assert.strictEqual(q.queuedJobs.length, 3);
+  assert.strictEqual(q.rejectedCount, 1);
+  assert.strictEqual(q.getStats().rejected, 1);
+});
+
+test('completing jobs frees depth capacity again', async () => {
+  const q = new JobQueue({ maxDepth: 2 });
+  q.registerHandler('work', async () => 'ok');
+  q.add('work', {});
+  q.add('work', {});
+
+  assert.throws(() => q.add('work', {}), QueueOverflowError);
+
+  q.start();
+  await new Promise((resolve) => {
+    let done = 0;
+    q.on('completed', () => {
+      done++;
+      if (done === 2) resolve();
+    });
+  });
+
+  // Terminal jobs no longer occupy queue depth: a new add succeeds.
+  const id = q.add('work', {});
+  assert.ok(id);
   await q.close();
 });

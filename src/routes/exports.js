@@ -152,7 +152,7 @@ const AVAILABLE_FIELDS = {
  * The previous placeholder accepted ANY Bearer token, which made every export
  * endpoint - including the admin-only system report - effectively public.
  *
- * @openapi security is documented per-route via bearerAuth.
+ * OpenAPI: security is documented per-route via the bearerAuth scheme.
  */
 
 /**

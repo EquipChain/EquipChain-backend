@@ -34,6 +34,27 @@ router.use('/api', docsRoutes);
  * rate limiter middleware (applied to /api in src/app.js) runs before this
  * handler and populates req.rateLimit, so the values are always accurate.
  */
+/**
+ * @openapi
+ * /api/system/rate-limits:
+ *   get:
+ *     summary: Rate-limit status for the caller
+ *     description: Returns the caller's resolved tier, configured limit, remaining requests in the current window, and window reset time.
+ *     tags: [System]
+ *     responses:
+ *       200:
+ *         description: Current rate-limit status
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 tier: { type: string, enum: [free, premium, admin, internal] }
+ *                 limit: { type: integer }
+ *                 remaining: { type: integer }
+ *                 resetTime: { type: string, format: date-time }
+ *                 retryAfter: { type: integer, description: Seconds until the window resets; present only when capped }
+ */
 router.get('/api/system/rate-limits', (req, res) => {
   const tier = determineTier(req);
   const tierConfig = RATE_LIMIT_TIERS[tier];

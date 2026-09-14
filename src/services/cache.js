@@ -102,12 +102,25 @@ class CacheService {
       const Redis = require('ioredis');
       this._client = new Redis(this._url, {
         maxRetriesPerRequest: 3,
+        // Fail fast per command while reconnecting: with the default
+        // offline queue, a Redis blip makes every cached request hang for
+        // the full connect timeout instead of falling through to the
+        // memory fallback - a cache outage became an API latency outage.
+        enableOfflineQueue: false,
+        connectTimeout: 3000,
         retryStrategy(times) {
           if (times > 3) {
             log.warn('Redis connection failed after 3 retries, using in-memory cache');
             return null; // Stop retrying
           }
           return Math.min(times * 200, 2000);
+        },
+        // Reconnect forever, but with backoff: a Redis restart should
+        // transparently re-attach the cache rather than require a deploy.
+        // (retryStrategy returning null above only stops the INITIAL
+        // connect attempt from being retried.)
+        reconnectOnError() {
+          return 1000;
         },
         lazyConnect: true,
       });

@@ -286,13 +286,15 @@ app.post('/api/auth/challenge', validate(authChallengeSchema), (req, res) => {
   }
   const { wallet } = req.body || {};
   // Real signed token: verifies against config.jwtSecret like every other
-  // route, carries the wallet as `sub` and an explicit dev_challenge flag
-  // so downstream authorization can treat these tokens differently.
+  // route, carries the wallet as `sub`, a unique jti (so it can be revoked),
+  // and an explicit dev_challenge flag so downstream authorization can
+  // treat these tokens differently.
   const token = jwt.sign(
     {
       sub: wallet || 'anonymous',
       roles: ['user'],
       dev_challenge: true,
+      jti: crypto.randomUUID(),
     },
     config.jwtSecret,
     { expiresIn: config.jwtExpiresIn, algorithm: 'HS256' }

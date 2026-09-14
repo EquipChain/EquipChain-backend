@@ -17,6 +17,11 @@ const defaultConfig = { rateLimitPerMinute: 60, maintenanceMode: false };
 let config = { ...defaultConfig };
 let configAuditLog = [];
 
+// Audit log cap: this log is only for admin inspection, so keeping the most
+// recent entries is sufficient. Without a cap, a long-lived process with
+// periodic config writes grows the array forever (slow memory leak).
+const MAX_AUDIT_ENTRIES = 500;
+
 const userStore = {
   list: () => users,
   get: (id) => users.find((u) => u.id === id),
@@ -83,20 +88,12 @@ const configStore = {
   get: () => config,
   update: (updates, adminId) => {
     config = { ...config, ...updates };
-    configAuditLog.push({
-      admin: adminId,
-      changes: updates,
-      timestamp: new Date().toISOString(),
-    });
+    _appendAudit({ admin: adminId, changes: updates });
     return config;
   },
   reset: (adminId) => {
     config = { ...defaultConfig };
-    configAuditLog.push({
-      admin: adminId,
-      changes: 'reset-to-defaults',
-      timestamp: new Date().toISOString(),
-    });
+    _appendAudit({ admin: adminId, changes: 'reset-to-defaults' });
     return config;
   },
   auditLog: () => configAuditLog,
@@ -105,5 +102,16 @@ const configStore = {
     configAuditLog = [];
   },
 };
+
+/**
+ * Append an audit entry, dropping the oldest when over the cap.
+ * @param {{ admin: string, changes: Object|string }} entry
+ */
+function _appendAudit(entry) {
+  configAuditLog.push({ ...entry, timestamp: new Date().toISOString() });
+  if (configAuditLog.length > MAX_AUDIT_ENTRIES) {
+    configAuditLog = configAuditLog.slice(-MAX_AUDIT_ENTRIES);
+  }
+}
 
 module.exports = { userStore, deviceStore, configStore };

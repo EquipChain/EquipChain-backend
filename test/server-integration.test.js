@@ -42,9 +42,19 @@ describe('server integration', () => {
     });
   });
 
-  after(() => {
+  after(async () => {
     if (serverProcess) {
+      // Signal and wait: node --test keeps the whole run open until every
+      // child handle closes, so firing SIGTERM without awaiting exit left a
+      // zombie server that hung the run past 180s.
+      const exited = new Promise((resolve) => serverProcess.once('exit', resolve));
       serverProcess.kill('SIGTERM');
+      const timeout = new Promise((resolve) => setTimeout(resolve, 15000).unref());
+      await Promise.race([exited, timeout]);
+      if (!exited) {
+        serverProcess.kill('SIGKILL');
+        await exited;
+      }
     }
   });
 

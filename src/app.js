@@ -1,3 +1,26 @@
+'use strict';
+
+// src/app.js
+//
+// The single canonical Express application for EquipChain.
+//
+// Historically this repo had TWO divergent apps: the modular src/app.js
+// (helmet, correlation logging, analytics/exports/docs routes) and a legacy
+// root index.js (auth challenge, admin routes, seeding, no helmet, no JSON
+// 404 handler). Routes existed in one but not the other, security middleware
+// differed per entry point, and integration tests failed against whichever
+// app they did not target (4 of the failures in test/api.integration.test.js
+// were exactly this: exports 401/format and admin 400 asserting against the
+// legacy app that lacked those routes).
+//
+// This app now carries the union of both, so every entry point and test sees
+// identical behavior:
+//   security headers -> CORS -> JSON body parsing (with 413 handled) ->
+//   rate limiting (tiered) -> correlation ID + request logging ->
+//   system routes (/, /health, /api/health) -> auth challenge/protected ->
+//   analytics -> exports -> docs/openapi -> admin (JWT + admin role) ->
+//   404 -> error handler.
+
 const crypto = require('crypto');
 const express = require('express');
 const cors = require('cors');
@@ -6,14 +29,28 @@ const { trace } = require('@opentelemetry/api');
 const { childLogger } = require('./config/logger');
 const config = require('./config');
 const routes = require('./routes');
+const { rateLimiter } = require('./middleware/rateLimiter');
+const { authenticate } = require('./middleware/auth');
+const { requireAdmin } = require('./middleware/requireAdmin');
+const { validate } = require('./middleware/validate');
+const { authChallengeSchema } = require('./schemas/validation.schema');
 const { sanitizeForLogging, sanitize } = require('./utils/sanitize');
 
 const app = express();
 const log = childLogger('http');
+app.disable('x-powered-by');
 
-// Security middleware
+// ─── Security & parsing ──────────────────────────────────────────────────────
+
 app.use(helmet());
-app.use(cors());
+app.use(
+  cors({
+    origin: config.corsOrigins,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-correlation-id', 'x-api-key', 'x-role'],
+    maxAge: 86400,
+  })
+);
 
 // Ensure Content-Type is application/json for all API responses
 app.use((req, res, next) => {
@@ -27,11 +64,14 @@ app.use((req, res, next) => {
   next();
 });
 
-// Body parsing middleware with size limits
-app.use(express.json({ limit: config.maxBodySize }));
+// Body parsing with size limits; PayloadTooLarge becomes a JSON 413 response
+const jsonParser = express.json({ limit: config.maxBodySize });
+app.use(jsonParser);
 app.use(express.urlencoded({ extended: true, limit: config.maxBodySize }));
+app.use('/api', rateLimiter);
 
-// Correlation ID and request logging middleware
+// ─── Correlation ID + request logging ────────────────────────────────────────
+
 app.use((req, res, next) => {
   const correlationId = req.headers['x-correlation-id'] || crypto.randomUUID();
   req.correlationId = correlationId;
@@ -61,8 +101,11 @@ app.use((req, res, next) => {
   next();
 });
 
-// Mount routes
+// ─── Router (system, analytics, exports, docs, admin) ────────────────────────
+
 app.use('/', routes);
+
+// ─── Legacy-compatible top-level endpoints ───────────────────────────────────
 
 // Root route with project info
 /**
@@ -82,7 +125,76 @@ app.get('/', (req, res) => {
   });
 });
 
-// 404 handler
+/**
+ * @openapi
+ * /api/health:
+ *   get:
+ *     summary: Health check (legacy path)
+ *     description: Docker/compose healthchecks and legacy clients probe this path.
+ *     tags: [System]
+ *     responses:
+ *       200: { description: Service health status }
+ */
+app.get('/api/health', (req, res) => {
+  res.json({
+    status: 'healthy',
+    uptime: process.uptime(),
+    timestamp: Date.now(),
+  });
+});
+
+/**
+ * @openapi
+ * /api/auth/challenge:
+ *   post:
+ *     summary: Wallet auth challenge
+ *     description: Returns a mock JWT for the given wallet (development auth flow).
+ *     tags: [Auth]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             properties:
+ *               wallet: { type: string }
+ *     responses:
+ *       200: { description: Challenge token issued }
+ *       400: { description: Validation failed }
+ */
+app.post('/api/auth/challenge', validate(authChallengeSchema), (req, res) => {
+  const { wallet } = req.body || {};
+  res.json({
+    token: `mock-jwt-${wallet || 'anonymous'}-${Date.now()}`,
+    expiresIn: 3600,
+  });
+});
+
+/**
+ * @openapi
+ * /api/protected:
+ *   get:
+ *     summary: Protected sample route
+ *     description: Requires a Bearer token; returns sensitive sample data.
+ *     tags: [Auth]
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200: { description: Authorized payload }
+ *       401: { description: Missing or invalid bearer token }
+ */
+app.get('/api/protected', (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+  res.json({
+    data: 'Sensitive meter data',
+    contract: config.contractId,
+  });
+});
+
+// ─── 404 handler ─────────────────────────────────────────────────────────────
+
 app.use((req, res) => {
   res.status(404).json({
     error: 'Not Found',
@@ -90,8 +202,24 @@ app.use((req, res) => {
   });
 });
 
-// Error handling middleware
+// ─── Error handler ───────────────────────────────────────────────────────────
+
+// eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
+  // Body-parser errors: report the client's mistake precisely (413/400)
+  if (err.type === 'entity.too.large') {
+    return res.status(413).json({
+      error: 'Payload Too Large',
+      message: `Request body exceeds the ${config.maxBodySize} limit`,
+    });
+  }
+  if (err.type === 'entity.parse.failed') {
+    return res.status(400).json({
+      error: 'Bad Request',
+      message: 'Request body is not valid JSON',
+    });
+  }
+
   log.error(
     {
       correlationId: req.correlationId,

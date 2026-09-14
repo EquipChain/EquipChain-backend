@@ -21,9 +21,32 @@ const { RATE_LIMIT_TIERS } = require('../config/rateLimits');
 
 const router = express.Router();
 
+// ─── Maintenance mode gate ──────────────────────────────────────────────────
+
+/**
+ * Enforce the admin-configurable maintenance kill-switch on the public API
+ * surface. Admin/config routes mount BELOW this gate deliberately: if a bad
+ * config change or failing dependency is the reason maintenance was enabled,
+ * operators must still be able to reach /api/admin to flip it back. Health
+ * endpoints also stay available so orchestrators keep an accurate picture.
+ *
+ * The flag is read per request (not captured at boot) so PATCHing
+ * /api/admin/config takes effect immediately, with no restart.
+ */
+function maintenanceGate(req, res, next) {
+  const { configStore } = require('../data/adminStore');
+  if (configStore.get().maintenanceMode === true) {
+    return res.status(503).json({
+      error: 'Service Unavailable',
+      message: 'Service is under maintenance. Try again later.',
+    });
+  }
+  return next();
+}
+
 // Public API surface
-router.use('/api/exports', exportRoutes);
-router.use('/api/analytics', analyticsRoutes);
+router.use('/api/exports', maintenanceGate, exportRoutes);
+router.use('/api/analytics', maintenanceGate, analyticsRoutes);
 router.use('/api', docsRoutes);
 
 /**

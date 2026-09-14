@@ -210,3 +210,35 @@ describe('Admin API - system', () => {
     assert.strictEqual(res.data.count, 0);
   });
 });
+
+describe('Maintenance mode kill-switch', () => {
+  it('gates public analytics traffic when enabled and un-gates when disabled', async () => {
+    // Sanity: traffic flows before maintenance.
+    const before = await request('GET', '/api/analytics/fleet-summary');
+    assert.strictEqual(before.status, 200);
+
+    const enable = await request('PATCH', '/api/admin/config', {
+      token: adminToken,
+      body: { values: { maintenanceMode: true } },
+    });
+    assert.strictEqual(enable.status, 200);
+
+    const during = await request('GET', '/api/analytics/fleet-summary');
+    assert.strictEqual(during.status, 503);
+    assert.strictEqual(during.data.error, 'Service Unavailable');
+
+    // Health stays available so orchestrators keep an accurate view.
+    const health = await request('GET', '/api/health');
+    assert.strictEqual(health.status, 200);
+
+    // Admin surface stays reachable so operators can flip it back.
+    const adminList = await request('GET', '/api/admin/users', { token: adminToken });
+    assert.strictEqual(adminList.status, 200);
+
+    const disable = await request('POST', '/api/admin/config/reset', { token: adminToken });
+    assert.strictEqual(disable.status, 200);
+
+    const after = await request('GET', '/api/analytics/fleet-summary');
+    assert.strictEqual(after.status, 200);
+  });
+});

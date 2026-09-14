@@ -96,4 +96,23 @@ describe('Cache Service', () => {
     const retrieved = await cache.get('complex');
     assert.deepStrictEqual(retrieved, complex);
   });
+
+  test('memory fallback stays bounded and evicts oldest entries at the cap', async () => {
+    // Small cap so the test is fast; the cap is read at insert time.
+    const originalMax = process.env.MEMORY_STORE_MAX_ENTRIES;
+    process.env.MEMORY_STORE_MAX_ENTRIES = '5';
+    try {
+      for (let i = 0; i < 8; i++) {
+        await cache.set(`bounded-${i}`, i, 60);
+      }
+      const stats = await cache.getStats();
+      assert.ok(stats.keys <= 5, `store must stay bounded (got ${stats.keys})`);
+      assert.strictEqual(await cache.get('bounded-0'), null, 'oldest entry must be evicted');
+      assert.strictEqual(await cache.get('bounded-7'), 7, 'newest entry must survive');
+      assert.ok(stats.evictions >= 3, `evictions must be counted (got ${stats.evictions})`);
+    } finally {
+      if (originalMax === undefined) delete process.env.MEMORY_STORE_MAX_ENTRIES;
+      else process.env.MEMORY_STORE_MAX_ENTRIES = originalMax;
+    }
+  });
 });

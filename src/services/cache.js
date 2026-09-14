@@ -12,7 +12,54 @@ const log = childLogger('cache');
 // ---------------------------------------------------------------------------
 // In-memory fallback store
 // ---------------------------------------------------------------------------
+// Used when Redis is unreachable. A Map grows without bound, and the fallback
+// path can be active for days (e.g. a forgotten Redis container), so the
+// store is capped: once MEMORY_STORE_MAX_ENTRIES is reached, insertion evicts
+// expired entries first, then the oldest (Map preserves insertion order).
+// A single flat cap bounds worst-case memory deterministically - far safer
+// than per-entry byte accounting, which the payload-size variance here
+// (small analytics payloads) does not justify.
 const memoryStore = new Map();
+let memoryStoreEvictions = 0;
+
+// Cap is read from the env lazily (memoised by raw value) so operators can
+// tune MEMORY_STORE_MAX_ENTRIES at runtime and tests can shrink it.
+let _cachedMaxRaw;
+let _cachedMaxValue;
+function memoryStoreMaxEntries() {
+  const raw = process.env.MEMORY_STORE_MAX_ENTRIES || '10000';
+  if (raw !== _cachedMaxRaw) {
+    const parsed = parseInt(raw, 10);
+    _cachedMaxRaw = raw;
+    _cachedMaxValue = Number.isFinite(parsed) && parsed >= 1 ? parsed : 10000;
+  }
+  return _cachedMaxValue;
+}
+
+/**
+ * Insert into the fallback store with bounded memory: evict expired entries
+ * first, then oldest, until there is room. Exported counters surface the
+ * eviction pressure in cache stats.
+ */
+function memoryStoreSet(key, entry) {
+  const maxEntries = memoryStoreMaxEntries();
+  if (memoryStore.size >= maxEntries && !memoryStore.has(key)) {
+    const now = Date.now();
+    for (const [existingKey, existing] of memoryStore) {
+      if (memoryStore.size < maxEntries) break;
+      if (existing.expiry && now > existing.expiry) {
+        memoryStore.delete(existingKey);
+        memoryStoreEvictions++;
+      }
+    }
+    while (memoryStore.size >= maxEntries) {
+      const oldestKey = memoryStore.keys().next().value;
+      memoryStore.delete(oldestKey);
+      memoryStoreEvictions++;
+    }
+  }
+  memoryStore.set(key, entry);
+}
 
 // ---------------------------------------------------------------------------
 // Stampede protection
@@ -136,7 +183,7 @@ class CacheService {
       const serialized = JSON.stringify(value);
 
       if (this._useMemory) {
-        memoryStore.set(key, {
+        memoryStoreSet(key, {
           value: serialized,
           expiry: resolvedTTL > 0 ? Date.now() + resolvedTTL * 1000 : null,
         });
@@ -290,6 +337,8 @@ class CacheService {
         type: 'memory',
         keys: memoryStore.size,
         connected: true,
+        maxEntries: memoryStoreMaxEntries(),
+        evictions: memoryStoreEvictions,
       };
     }
 

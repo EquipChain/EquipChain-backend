@@ -280,4 +280,5 @@ const scheduler = new Scheduler();
 
 module.exports = {
   scheduler,
+  Scheduler,
 };

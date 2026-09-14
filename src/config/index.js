@@ -22,6 +22,8 @@ const {
   JOB_BATCH_SIZE = '10',
   SHUTDOWN_TIMEOUT_MS = '10000',
   REDIS_URL = 'redis://localhost:6379',
+  JWT_SECRET = '',
+  JWT_EXPIRES_IN = '1h',
 } = process.env;
 
 const isProduction = NODE_ENV === 'production';
@@ -52,6 +54,32 @@ if (!/^\d+(\.\d+)?(b|kb|mb|gb)?$/i.test(MAX_BODY_SIZE.trim())) {
   );
 }
 
+// JWT_SECRET governs every authenticated route (admin API, exports).
+// Failing fast with a precise message beats serving 500
+// "Server misconfigured" on each request after boot - and beats the
+// previous silent acceptance of weak development secrets in production.
+if (!JWT_SECRET || JWT_SECRET.trim().length < 32) {
+  if (isProduction) {
+    throw new Error(
+      'JWT_SECRET is required in production and must be at least 32 characters. ' +
+        'Generate one with: node -e "console.log(require(\'crypto\').randomBytes(48).toString(\'hex\'))"'
+    );
+  }
+  if (!isTest) {
+    // Development convenience only - loudly flagged, never in production.
+    // eslint-disable-next-line no-console
+    console.warn(
+      '[config] JWT_SECRET not set or shorter than 32 chars; using an ephemeral ' +
+        'development secret. Tokens will invalidate on every restart.'
+    );
+  }
+}
+
+const effectiveJwtSecret =
+  JWT_SECRET && JWT_SECRET.trim().length >= 32
+    ? JWT_SECRET
+    : `dev-only-${require('crypto').randomBytes(24).toString('hex')}`;
+
 const config = Object.freeze({
   env: NODE_ENV,
   port: toInt(PORT, 3000),
@@ -61,6 +89,8 @@ const config = Object.freeze({
   maxBodySize: MAX_BODY_SIZE.trim(),
   corsOrigins,
   redisUrl: REDIS_URL,
+  jwtSecret: effectiveJwtSecret,
+  jwtExpiresIn: JWT_EXPIRES_IN,
   jobs: Object.freeze({
     concurrency: toInt(JOB_CONCURRENCY, 5),
     retryAttempts: toInt(JOB_RETRY_ATTEMPTS, 3),

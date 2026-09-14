@@ -1,10 +1,24 @@
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert');
 const http = require('http');
+const jwt = require('jsonwebtoken');
 
 // We'll test the app by importing it and creating a test server
 process.env.NODE_ENV = 'test';
 process.env.JWT_SECRET = 'test-secret-for-integration-tests';
+
+// Exports and admin routes enforce real JWT auth, so mint tokens for the
+// roles the assertions need (previously any Bearer string was accepted).
+const userToken = jwt.sign(
+  { sub: 'integration-tester', roles: ['user'] },
+  process.env.JWT_SECRET,
+  { expiresIn: '1h' }
+);
+const adminToken = jwt.sign(
+  { sub: 'integration-tester', roles: ['admin'] },
+  process.env.JWT_SECRET,
+  { expiresIn: '1h' }
+);
 
 const app = require('../index');
 
@@ -131,10 +145,17 @@ describe('API Integration Tests', () => {
 
     test('GET /api/exports/readings should validate format', async () => {
       const res = await makeRequest('GET', '/api/exports/readings?format=csv', null, {
-        Authorization: 'Bearer test-token',
+        Authorization: `Bearer ${userToken}`,
       });
       // Should succeed or return validation error for format
       assert.ok([200, 400].includes(res.status));
+    });
+
+    test('GET /api/exports/readings should reject forged tokens', async () => {
+      const res = await makeRequest('GET', '/api/exports/readings?format=csv', null, {
+        Authorization: 'Bearer test-token',
+      });
+      assert.strictEqual(res.status, 401);
     });
   });
 
@@ -148,10 +169,20 @@ describe('API Integration Tests', () => {
       const res = await makeRequest('POST', '/api/admin/users', {
         // Missing required fields
       }, {
-        Authorization: 'Bearer test-token',
+        Authorization: `Bearer ${adminToken}`,
       });
-      // Should return 403 (no admin role) or 400 (validation failed)
-      assert.ok([400, 403].includes(res.status));
+      // Admin token present -> body validation fires with 400
+      assert.strictEqual(res.status, 400);
+    });
+
+    test('POST /api/admin/users should reject non-admin roles', async () => {
+      const res = await makeRequest('POST', '/api/admin/users', {
+        email: 'x@example.com',
+        name: 'X',
+      }, {
+        Authorization: `Bearer ${userToken}`,
+      });
+      assert.strictEqual(res.status, 403);
     });
   });
 

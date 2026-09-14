@@ -1,6 +1,7 @@
 const { test, describe, before, after } = require('node:test');
 const assert = require('node:assert');
 const http = require('http');
+const jwt = require('jsonwebtoken');
 
 describe('Export Endpoints Integration Tests', () => {
   let server;
@@ -10,7 +11,17 @@ describe('Export Endpoints Integration Tests', () => {
     // Start the server for testing
     process.env.PORT = PORT;
     process.env.NODE_ENV = 'test';
-    
+    process.env.JWT_SECRET = process.env.JWT_SECRET || 'test-secret-for-exports-integration';
+
+    // Exports now enforce real JWT auth (previously ANY Bearer token was
+    // accepted). Mint short-lived tokens for a regular user and an admin.
+    const signToken = (roles) =>
+      jwt.sign({ sub: 'export-tester', roles }, process.env.JWT_SECRET, { expiresIn: '1h' });
+    var userToken = signToken(['user']);
+    var adminToken = signToken(['admin']);
+    global.userToken = userToken;
+    global.adminToken = adminToken;
+
     const app = require('../src/app');
     server = app.listen(PORT);
     
@@ -66,7 +77,7 @@ describe('Export Endpoints Integration Tests', () => {
 
     test('should return CSV with valid authentication', async () => {
       const response = await makeRequest('/api/exports/readings?format=csv', {
-        headers: { Authorization: 'Bearer test-token' },
+        headers: { Authorization: `Bearer ${global.userToken}` },
       });
       
       assert.strictEqual(response.statusCode, 200);
@@ -78,7 +89,7 @@ describe('Export Endpoints Integration Tests', () => {
 
     test('should return JSON when format=json', async () => {
       const response = await makeRequest('/api/exports/readings?format=json', {
-        headers: { Authorization: 'Bearer test-token' },
+        headers: { Authorization: `Bearer ${global.userToken}` },
       });
       
       assert.strictEqual(response.statusCode, 200);
@@ -91,7 +102,7 @@ describe('Export Endpoints Integration Tests', () => {
 
     test('should return NDJSON when format=ndjson', async () => {
       const response = await makeRequest('/api/exports/readings?format=ndjson', {
-        headers: { Authorization: 'Bearer test-token' },
+        headers: { Authorization: `Bearer ${global.userToken}` },
       });
       
       assert.strictEqual(response.statusCode, 200);
@@ -106,7 +117,7 @@ describe('Export Endpoints Integration Tests', () => {
 
     test('should filter by fields parameter', async () => {
       const response = await makeRequest('/api/exports/readings?format=csv&fields=id,meterId,value', {
-        headers: { Authorization: 'Bearer test-token' },
+        headers: { Authorization: `Bearer ${global.userToken}` },
       });
       
       assert.strictEqual(response.statusCode, 200);
@@ -117,7 +128,7 @@ describe('Export Endpoints Integration Tests', () => {
 
     test('should return 400 for invalid fields', async () => {
       const response = await makeRequest('/api/exports/readings?format=csv&fields=invalid,nonexistent', {
-        headers: { Authorization: 'Bearer test-token' },
+        headers: { Authorization: `Bearer ${global.userToken}` },
       });
       
       assert.strictEqual(response.statusCode, 400);
@@ -127,7 +138,7 @@ describe('Export Endpoints Integration Tests', () => {
 
     test('should filter by meterIds', async () => {
       const response = await makeRequest('/api/exports/readings?format=json&meterIds=meter-001', {
-        headers: { Authorization: 'Bearer test-token' },
+        headers: { Authorization: `Bearer ${global.userToken}` },
       });
       
       assert.strictEqual(response.statusCode, 200);
@@ -139,7 +150,7 @@ describe('Export Endpoints Integration Tests', () => {
 
     test('should filter by date range', async () => {
       const response = await makeRequest('/api/exports/readings?format=json&startDate=2026-01-15&endDate=2026-01-15', {
-        headers: { Authorization: 'Bearer test-token' },
+        headers: { Authorization: `Bearer ${global.userToken}` },
       });
       
       assert.strictEqual(response.statusCode, 200);
@@ -152,7 +163,7 @@ describe('Export Endpoints Integration Tests', () => {
 
     test('should include date range in filename', async () => {
       const response = await makeRequest('/api/exports/readings?format=csv&startDate=2026-01-01&endDate=2026-06-01', {
-        headers: { Authorization: 'Bearer test-token' },
+        headers: { Authorization: `Bearer ${global.userToken}` },
       });
       
       assert.strictEqual(response.statusCode, 200);
@@ -161,7 +172,7 @@ describe('Export Endpoints Integration Tests', () => {
 
     test('should return 400 for invalid format', async () => {
       const response = await makeRequest('/api/exports/readings?format=xml', {
-        headers: { Authorization: 'Bearer test-token' },
+        headers: { Authorization: `Bearer ${global.userToken}` },
       });
       
       assert.strictEqual(response.statusCode, 400);
@@ -176,7 +187,7 @@ describe('Export Endpoints Integration Tests', () => {
 
     test('should return daily analytics', async () => {
       const response = await makeRequest('/api/exports/analytics/daily?format=csv', {
-        headers: { Authorization: 'Bearer test-token' },
+        headers: { Authorization: `Bearer ${global.userToken}` },
       });
       
       assert.strictEqual(response.statusCode, 200);
@@ -186,7 +197,7 @@ describe('Export Endpoints Integration Tests', () => {
 
     test('should return weekly analytics', async () => {
       const response = await makeRequest('/api/exports/analytics/weekly?format=json', {
-        headers: { Authorization: 'Bearer test-token' },
+        headers: { Authorization: `Bearer ${global.userToken}` },
       });
       
       assert.strictEqual(response.statusCode, 200);
@@ -196,7 +207,7 @@ describe('Export Endpoints Integration Tests', () => {
 
     test('should return monthly analytics', async () => {
       const response = await makeRequest('/api/exports/analytics/monthly?format=json', {
-        headers: { Authorization: 'Bearer test-token' },
+        headers: { Authorization: `Bearer ${global.userToken}` },
       });
       
       assert.strictEqual(response.statusCode, 200);
@@ -206,17 +217,24 @@ describe('Export Endpoints Integration Tests', () => {
 
     test('should return 400 for invalid summary type', async () => {
       const response = await makeRequest('/api/exports/analytics/invalid', {
-        headers: { Authorization: 'Bearer test-token' },
+        headers: { Authorization: `Bearer ${global.userToken}` },
       });
       
       assert.strictEqual(response.statusCode, 400);
       const data = JSON.parse(response.body);
-      assert.ok(data.error.includes('Invalid summary type'));
+      // Params validation reports the offending field through the standard
+      // validation error envelope ({ error, details:[{ location, path }] }).
+      assert.ok(
+        (data.details || []).some(
+          (d) => d.location === 'params' && d.path === 'summaryType'
+        ),
+        `expected params.summaryType validation failure, got: ${JSON.stringify(data)}`
+      );
     });
 
     test('should filter daily analytics by date range', async () => {
       const response = await makeRequest('/api/exports/analytics/daily?format=json&startDate=2026-01-15&endDate=2026-01-16', {
-        headers: { Authorization: 'Bearer test-token' },
+        headers: { Authorization: `Bearer ${global.userToken}` },
       });
       
       assert.strictEqual(response.statusCode, 200);
@@ -236,7 +254,7 @@ describe('Export Endpoints Integration Tests', () => {
 
     test('should return 403 without admin role', async () => {
       const response = await makeRequest('/api/exports/system-report', {
-        headers: { Authorization: 'Bearer test-token' },
+        headers: { Authorization: `Bearer ${global.userToken}` },
       });
       
       assert.strictEqual(response.statusCode, 403);
@@ -245,8 +263,7 @@ describe('Export Endpoints Integration Tests', () => {
     test('should return system report with admin role', async () => {
       const response = await makeRequest('/api/exports/system-report?format=json', {
         headers: { 
-          Authorization: 'Bearer test-token',
-          'x-role': 'admin',
+          Authorization: `Bearer ${global.adminToken}`,
         },
       });
       
@@ -261,8 +278,7 @@ describe('Export Endpoints Integration Tests', () => {
     test('should filter sections', async () => {
       const response = await makeRequest('/api/exports/system-report?format=json&sections=meters,summary', {
         headers: { 
-          Authorization: 'Bearer test-token',
-          'x-role': 'admin',
+          Authorization: `Bearer ${global.adminToken}`,
         },
       });
       
@@ -277,8 +293,7 @@ describe('Export Endpoints Integration Tests', () => {
     test('should handle CSV format for system report', async () => {
       const response = await makeRequest('/api/exports/system-report?format=csv', {
         headers: { 
-          Authorization: 'Bearer test-token',
-          'x-role': 'admin',
+          Authorization: `Bearer ${global.adminToken}`,
         },
       });
       
@@ -296,7 +311,7 @@ describe('Export Endpoints Integration Tests', () => {
 
     test('should return meters with valid authentication', async () => {
       const response = await makeRequest('/api/exports/meters?format=csv', {
-        headers: { Authorization: 'Bearer test-token' },
+        headers: { Authorization: `Bearer ${global.userToken}` },
       });
       
       assert.strictEqual(response.statusCode, 200);
@@ -305,7 +320,7 @@ describe('Export Endpoints Integration Tests', () => {
 
     test('should filter by status', async () => {
       const response = await makeRequest('/api/exports/meters?format=json&status=online', {
-        headers: { Authorization: 'Bearer test-token' },
+        headers: { Authorization: `Bearer ${global.userToken}` },
       });
       
       assert.strictEqual(response.statusCode, 200);
@@ -317,7 +332,7 @@ describe('Export Endpoints Integration Tests', () => {
 
     test('should filter by location', async () => {
       const response = await makeRequest('/api/exports/meters?format=json&location=Building A', {
-        headers: { Authorization: 'Bearer test-token' },
+        headers: { Authorization: `Bearer ${global.userToken}` },
       });
       
       assert.strictEqual(response.statusCode, 200);
@@ -331,7 +346,7 @@ describe('Export Endpoints Integration Tests', () => {
   describe('Streaming and Performance', () => {
     test('should set Transfer-Encoding: chunked', async () => {
       const response = await makeRequest('/api/exports/readings?format=csv', {
-        headers: { Authorization: 'Bearer test-token' },
+        headers: { Authorization: `Bearer ${global.userToken}` },
       });
       
       assert.strictEqual(response.statusCode, 200);
@@ -340,7 +355,7 @@ describe('Export Endpoints Integration Tests', () => {
 
     test('should handle pretty-printed JSON', async () => {
       const response = await makeRequest('/api/exports/readings?format=json&pretty=true', {
-        headers: { Authorization: 'Bearer test-token' },
+        headers: { Authorization: `Bearer ${global.userToken}` },
       });
       
       assert.strictEqual(response.statusCode, 200);
@@ -351,7 +366,7 @@ describe('Export Endpoints Integration Tests', () => {
       // This test would require modifying the mock to return empty data
       // For now, we just verify the endpoint handles the request
       const response = await makeRequest('/api/exports/readings?format=csv&meterIds=nonexistent', {
-        headers: { Authorization: 'Bearer test-token' },
+        headers: { Authorization: `Bearer ${global.userToken}` },
       });
       
       assert.strictEqual(response.statusCode, 200);
@@ -362,7 +377,7 @@ describe('Export Endpoints Integration Tests', () => {
   describe('Error Handling', () => {
     test('should return 400 for malformed fields parameter', async () => {
       const response = await makeRequest('/api/exports/readings?format=csv&fields=invalid', {
-        headers: { Authorization: 'Bearer test-token' },
+        headers: { Authorization: `Bearer ${global.userToken}` },
       });
       
       assert.strictEqual(response.statusCode, 400);
@@ -370,7 +385,7 @@ describe('Export Endpoints Integration Tests', () => {
 
     test('should handle invalid date format gracefully', async () => {
       const response = await makeRequest('/api/exports/readings?format=csv&startDate=invalid-date', {
-        headers: { Authorization: 'Bearer test-token' },
+        headers: { Authorization: `Bearer ${global.userToken}` },
       });
       
       // Should not crash - may return empty results or error

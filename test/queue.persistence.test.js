@@ -164,7 +164,9 @@ test('timeoutMs=0 disables the budget entirely', async () => {
 
 test('add() rejects jobs beyond the depth cap with QueueOverflowError', () => {
   const q = new JobQueue({ maxDepth: 3 });
-  const ids = [q.add('a', {}), q.add('b', {}), q.add('c', {})];
+  q.add('a', {});
+  q.add('b', {});
+  q.add('c', {});
   assert.strictEqual(q.queuedJobs.length, 3);
 
   assert.throws(

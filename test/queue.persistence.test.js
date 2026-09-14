@@ -96,3 +96,68 @@ test('cancelled jobs are persisted as terminal and not re-queued', () => {
   assert.ok(!q2.queuedJobs.includes(id));
   fs.rmSync(file, { force: true });
 });
+
+test('a hung handler times out, releases its slot, and retries', async () => {
+  const q = new JobQueue();
+  let calls = 0;
+  let aborted = false;
+  q.registerHandler('hang', (_data, { signal } = {}) => {
+    calls++;
+    return new Promise((resolve) => {
+      if (signal.aborted) {
+        aborted = true;
+        resolve('late');
+        return;
+      }
+      signal.addEventListener('abort', () => {
+        aborted = true;
+      });
+      // Never resolves on its own; the abort ends the wait.
+      signal.addEventListener('abort', () => resolve('late'));
+    });
+  });
+
+  const id = q.add('hang', {}, { timeoutMs: 50, maxAttempts: 2 });
+  q.start();
+
+  const sawTimeoutFailure = await new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), 5000);
+    q.on('retry', (job) => {
+      if (job.id === id && job.error && job.error.includes('timed out')) {
+        clearTimeout(timer);
+        resolve(true);
+      }
+    });
+  });
+  assert.ok(sawTimeoutFailure, 'expected a retry with a timeout error');
+  assert.strictEqual(aborted, true, 'handler signal must fire on timeout');
+  assert.strictEqual(calls, 1, 'first attempt only at this point (backoff pending)');
+
+  await q.close();
+});
+
+test('a handler finishing within its budget is unaffected by the timeout', async () => {
+  const q = new JobQueue();
+  q.registerHandler('quick', async () => 'ok');
+  const id = q.add('quick', {}, { timeoutMs: 1000 });
+  q.start();
+
+  await new Promise((resolve) => q.once('completed', resolve));
+  assert.strictEqual(q.getStatus(id).status, JobStatus.COMPLETED);
+  assert.strictEqual(q.getStatus(id).result, 'ok');
+  await q.close();
+});
+
+test('timeoutMs=0 disables the budget entirely', async () => {
+  const q = new JobQueue();
+  q.registerHandler('slow', async () => {
+    await new Promise((r) => setTimeout(r, 120));
+    return 'done';
+  });
+  const id = q.add('slow', {}, { timeoutMs: 0 });
+  q.start();
+
+  await new Promise((resolve) => q.once('completed', resolve));
+  assert.strictEqual(q.getStatus(id).result, 'done');
+  await q.close();
+});

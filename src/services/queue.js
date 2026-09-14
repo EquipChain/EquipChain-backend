@@ -18,6 +18,13 @@ const QUEUE_PERSIST_PATH = process.env.QUEUE_PERSIST_PATH || '';
 const PERSIST_FLUSH_MS = parseInt(process.env.QUEUE_PERSIST_FLUSH_MS || '250', 10);
 const CLOSE_DRAIN_TIMEOUT_MS = parseInt(process.env.QUEUE_DRAIN_TIMEOUT_MS || '5000', 10);
 
+// Per-job wall-clock budget. A hung handler otherwise pins a concurrency
+// slot forever, slowly starving the queue. The timeout failure flows through
+// the normal retry ladder; handlers may accept an AbortSignal that fires on
+// timeout so they can cancel in-flight work (HTTP calls, timers, ...).
+// 0 disables the budget entirely.
+const JOB_TIMEOUT_MS = parseInt(process.env.JOB_TIMEOUT_MS || '60000', 10);
+
 // Completed/failed jobs are kept for status inspection (getStats, getStatus)
 // but must not accumulate forever: the billing/sync/cacheWarm schedules add
 // jobs every few minutes, so an unbounded Map grows for the life of the
@@ -89,6 +96,7 @@ class JobQueue extends EventEmitter {
       priority: options.priority || Priority.NORMAL,
       attempts: 0,
       maxAttempts: options.maxAttempts || JOB_RETRY_ATTEMPTS,
+      timeoutMs: options.timeoutMs !== undefined ? options.timeoutMs : JOB_TIMEOUT_MS,
       delay: options.delay || 0,
       runAt: null,
       createdAt: new Date(),
@@ -364,8 +372,8 @@ class JobQueue extends EventEmitter {
     log.info({ jobId: job.id, type: job.type }, 'Job started');
 
     try {
-      const result = await handler(job.data);
-      
+      const result = await this._runWithTimeout(handler, job);
+
       job.status = JobStatus.COMPLETED;
       job.result = result;
       job.completedAt = new Date();
@@ -420,6 +428,60 @@ class JobQueue extends EventEmitter {
 
     // Process next jobs
     this._process();
+  }
+
+  /**
+   * Run a handler under the job's wall-clock budget.
+   *
+   * - timeoutMs = 0 disables the budget and simply awaits the handler.
+   * - On timeout, the abort controller fires so cancellable handlers (HTTP,
+   *   streams, timers) can stop their work; the rejection flows through the
+   *   normal retry ladder. The abandoned handler promise is deliberately not
+   *   awaited again - its eventual result or rejection is ignored, so
+   *   handlers must not swallow the signal to keep semantics predictable.
+   *
+   * @param {Function} handler - Registered job handler
+   * @param {Object} job - The job being executed
+   * @returns {Promise<*>} Handler result
+   */
+  _runWithTimeout(handler, job) {
+    const timeoutMs = job.timeoutMs || 0;
+    if (!(timeoutMs > 0)) {
+      return Promise.resolve(handler(job.data, { signal: undefined }));
+    }
+
+    const controller = new AbortController();
+    let timer = null;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => {
+        // Reject BEFORE aborting: abort can settle the handler promise in
+        // the same tick (cancellable handlers resolve on the signal), and
+        // race would then hand the abandoned result to the job. Rejecting
+        // first guarantees the timeout error wins.
+        reject(new Error(`Job timed out after ${timeoutMs}ms`));
+        controller.abort();
+      }, timeoutMs);
+      // A timeout must not keep the event loop alive by itself.
+      if (typeof timer.unref === 'function') {
+        timer.unref();
+      }
+    });
+
+    let work;
+    try {
+      work = Promise.resolve(handler(job.data, { signal: controller.signal }));
+    } catch (err) {
+      clearTimeout(timer);
+      return Promise.reject(err);
+    }
+
+    // Never surface a late rejection from the abandoned work as an
+    // unhandledRejection: attach a no-op catch on a shadow promise.
+    work.catch(() => {});
+
+    return Promise.race([work, timeout]).finally(() => {
+      clearTimeout(timer);
+    });
   }
 
   /**

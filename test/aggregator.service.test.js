@@ -109,9 +109,11 @@ describe('Aggregator Service', () => {
     });
 
     test('should generate correct week bucket key', () => {
-      // Wednesday Jan 15, 2026 -> Monday Jan 13, 2026
+      // 2026-01-15 is a Thursday (2026-01-01 is a Thursday), so its ISO week
+      // (Monday-start, matching getBucketKey's dayOfWeek===0?6:dayOfWeek-1)
+      // begins Monday 2026-01-12.
       const ts = new Date('2026-01-15T14:30:00Z').getTime();
-      assert.strictEqual(getBucketKey(ts, 'week'), '2026-01-13');
+      assert.strictEqual(getBucketKey(ts, 'week'), '2026-01-12');
     });
 
     test('should generate all bucket keys between dates', () => {

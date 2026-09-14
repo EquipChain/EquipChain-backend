@@ -11,7 +11,11 @@ const server = app.listen(0);
 after(() => server.close());
 
 const signToken = (roles) =>
-  jwt.sign({ sub: 'test-user', roles }, process.env.JWT_SECRET, { expiresIn: '1h' });
+  jwt.sign(
+    { sub: 'test-user', roles, jti: require('crypto').randomUUID() },
+    process.env.JWT_SECRET,
+    { expiresIn: '1h' }
+  );
 
 const adminToken = signToken(['admin']);
 const userToken = signToken(['user']);
@@ -231,6 +235,29 @@ describe('Admin API - system', () => {
     const res = await request('GET', '/api/admin/system/ws-connections', { token: adminToken });
     assert.strictEqual(res.status, 200);
     assert.strictEqual(res.data.count, 0);
+  });
+});
+
+describe('Admin token revocation', () => {
+  it('rejects a revoked token with 401 (server-side sign-out)', async () => {
+    const token = signToken(['admin']);
+    // Token works before revocation.
+    const before = await request('GET', '/api/admin/users', { token });
+    assert.strictEqual(before.status, 200);
+
+    // Decode jti and revoke via the logout endpoint.
+    const decoded = jwt.decode(token);
+    const logout = await request('POST', '/api/admin/logout', { token });
+    assert.strictEqual(logout.status, 200);
+
+    // Same token must now be rejected everywhere.
+    const after = await request('GET', '/api/admin/users', { token });
+    assert.strictEqual(after.status, 401);
+    assert.strictEqual(after.data.error, 'Token has been revoked.');
+
+    // Other tokens are unaffected.
+    const other = await request('GET', '/api/admin/users', { token: adminToken });
+    assert.strictEqual(other.status, 200);
   });
 });
 

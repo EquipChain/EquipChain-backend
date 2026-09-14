@@ -81,12 +81,31 @@ function generateId() {
 }
 
 /**
+ * Upper bound on a single ingest batch. addReadings is reachable from
+ * request paths (contract sync payloads) as well as scripts; an unbounded
+ * array would let one call allocate tens of millions of stored objects and
+ * OOM the process, so oversized batches are rejected outright.
+ */
+const MAX_BATCH_SIZE = 10000;
+
+/**
  * Add one or more readings to the in-memory store.
  * @param {Array|Object} data - Single reading or array of readings
  * @returns {Array} The stored reading(s)
+ * @throws {TypeError} when data is missing, malformed, or oversized
  */
 function addReadings(data) {
+  if (!data || (typeof data !== 'object' && !Array.isArray(data))) {
+    throw new TypeError('addReadings expects a reading object or array of readings');
+  }
+
   const items = Array.isArray(data) ? data : [data];
+  if (items.length > MAX_BATCH_SIZE) {
+    throw new TypeError(
+      `Reading batch of ${items.length} exceeds the maximum of ${MAX_BATCH_SIZE}; split the ingest into smaller batches`
+    );
+  }
+
   const stored = items.map((item) => ({
     id: generateId(),
     meterId: item.meterId,

@@ -256,9 +256,27 @@ app.use((err, req, res, next) => {
     'request error'
   );
 
-  res.status(err.status || 500).json({
+  // Structured ValidationError (400) carries a machine-readable details
+  // array - surface it verbatim so clients can correct their input.
+  if (err.name === 'ValidationError' && Array.isArray(err.details)) {
+    return res.status(400).json({
+      error: 'Validation failed',
+      details: err.details,
+    });
+  }
+
+  const status = err.status || err.statusCode || 500;
+  const isClientError = status >= 400 && status < 500;
+
+  res.status(status).json({
     error: err.name || 'Internal Server Error',
-    message: config.isProduction ? 'An error occurred' : sanitize(err.message),
+    // Client errors are the caller's fault - the message is actionable and
+    // safe. For 500s the message may contain internals (driver errors, file
+    // paths, queries), so it never leaves the server regardless of env; the
+    // correlation ID in the response links the client to the server log.
+    message: isClientError
+      ? sanitize(err.message)
+      : 'An error occurred. Reference: ' + (req.correlationId || 'unknown'),
   });
 });
 

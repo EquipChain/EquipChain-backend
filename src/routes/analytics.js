@@ -1,6 +1,7 @@
 const { Router } = require('express');
 const { childLogger } = require('../config/logger');
 const { getReadings, aggregateReadings, fleetSummary, comparePeriods } = require('../services/aggregator');
+const { cacheService } = require('../services/cache');
 const { validate } = require('../middleware/validate');
 const {
   dailySummarySchema,
@@ -294,7 +295,7 @@ router.get('/custom-range', validate(customRangeSchema), (req, res, next) => {
  *       200: { description: Fleet summary }
  *       400: { description: Validation failed }
  */
-router.get('/fleet-summary', validate(fleetSummarySchema), (req, res, next) => {
+router.get('/fleet-summary', validate(fleetSummarySchema), async (req, res, next) => {
   try {
     const { parsed, errors } = parseQuery(fleetSummarySchema, req.query);
     if (errors) {
@@ -303,8 +304,31 @@ router.get('/fleet-summary', validate(fleetSummarySchema), (req, res, next) => {
 
     const { startDate, endDate, aggregationType } = parsed;
 
+    // Cache-aside: the retention sweeper's hourly cadence and the cache-warm
+    // job refresh analytics:fleet-summary:today, so today's unfiltered,
+    // default-aggregation request (the dashboard's most common call) reads
+    // warm. Every other shape computes and back-fills the cache.
+    const isDefaultShape = !startDate && !endDate && aggregationType === 'avg';
+    const cacheKey = 'analytics:fleet-summary:today';
+
+    if (isDefaultShape) {
+      const cached = await cacheService.get(cacheKey);
+      if (cached) {
+        return res.json(cached);
+      }
+    }
+
     const readings = getReadings({ startDate, endDate });
     const summary = fleetSummary(readings, { startDate, endDate, aggregationType });
+
+    if (isDefaultShape) {
+      // Best-effort back-fill; a cache outage must not fail the request.
+      try {
+        await cacheService.set(cacheKey, summary, 600);
+      } catch {
+        // ignore
+      }
+    }
 
     res.json(summary);
   } catch (err) {

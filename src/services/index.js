@@ -2,6 +2,7 @@ const { childLogger } = require('../config/logger');
 const { queue } = require('./queue');
 const { scheduler } = require('./scheduler');
 const { cacheService } = require('./cache');
+const { registerGaugeProvider } = require('../middleware/metrics');
 const billingHandler = require('../jobs/billing.job');
 const reportsHandler = require('../jobs/reports.job');
 const syncHandler = require('../jobs/sync.job');
@@ -27,6 +28,24 @@ const services = {
 async function initServices(app) {
   try {
     log.info('Initializing services...');
+
+    // Business gauges for /metrics: queue depth, schedules, cache fallback
+    // pressure. Registered here so every gauge reflects live service state
+    // and unregisters with shutdown.
+    registerGaugeProvider(() => [
+      {
+        name: 'equipchain_queue_jobs',
+        help: 'Jobs in the queue by status.',
+        values: Object.entries(queue.getStats())
+          .filter(([key]) => ['queued', 'running', 'completed', 'failed', 'cancelled'].includes(key))
+          .map(([status, value]) => ({ labels: { status }, value })),
+      },
+      {
+        name: 'equipchain_scheduler_schedules',
+        help: 'Registered recurring schedules.',
+        values: [{ value: scheduler.getAllSchedules().length }],
+      },
+    ]);
 
     // Initialize cache service
     await cacheService.connect();

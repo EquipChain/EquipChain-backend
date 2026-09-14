@@ -26,6 +26,28 @@ const durationHistograms = new Map();
 const processStartMs = Date.now();
 
 /**
+ * Gauge providers registered by services (queue depth, schedule count,
+ * cache pressure, ...). Each provider returns zero or more gauge series:
+ *   { name, help, values: [{ labels: {...}, value }] }
+ * Providers run on every scrape, so gauges always reflect live state without
+ * any push machinery. A throwing provider is skipped (with a warning) so one
+ * broken service cannot poison the whole scrape.
+ */
+const gaugeProviders = new Set();
+
+/**
+ * Register a gauge provider. Returns an unregister function so services can
+ * remove their gauges on shutdown (avoids scraping dead instances' state).
+ *
+ * @param {() => Array<{name: string, help: string, values: Array<{labels?: Object, value: number}>}>} provider
+ * @returns {() => void}
+ */
+function registerGaugeProvider(provider) {
+  gaugeProviders.add(provider);
+  return () => gaugeProviders.delete(provider);
+}
+
+/**
  * Best-effort route label for cardinality safety. Falls back through:
  * mounted route path -> baseUrl+'/' -> 'unmatched' (e.g. 404s).
  */
@@ -131,7 +153,29 @@ function renderMetrics() {
   lines.push(`equipchain_process_heap_bytes{type="used"} ${mem.heapUsed}`);
   lines.push(`equipchain_process_heap_bytes{type="total"} ${mem.heapTotal}`);
 
+  // Service gauges (queue depth, schedules, cache pressure, ...).
+  for (const provider of gaugeProviders) {
+    try {
+      for (const gauge of provider()) {
+        if (!gauge || !gauge.name || !Array.isArray(gauge.values)) continue;
+        lines.push(`# HELP ${gauge.name} ${escapeLabel(gauge.help || gauge.name)}`);
+        lines.push(`# TYPE ${gauge.name} gauge`);
+        for (const series of gauge.values) {
+          const labels = Object.entries(series.labels || {})
+            .map(([k, v]) => `${k}="${escapeLabel(v)}"`)
+            .join(',');
+          const labelPart = labels ? `{${labels}}` : '';
+          const value = Number(series.value);
+          if (!Number.isFinite(value)) continue;
+          lines.push(`${gauge.name}${labelPart} ${value}`);
+        }
+      }
+    } catch (err) {
+      log.warn({ error: err.message }, 'gauge provider failed during scrape');
+    }
+  }
+
   return lines.join('\n') + '\n';
 }
 
-module.exports = { metricsMiddleware, renderMetrics, HTTP_DURATION_BUCKETS_MS };
+module.exports = { metricsMiddleware, renderMetrics, registerGaugeProvider, HTTP_DURATION_BUCKETS_MS };

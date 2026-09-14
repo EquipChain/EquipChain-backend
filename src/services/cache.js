@@ -193,7 +193,17 @@ class CacheService {
       }
 
       if (!this._client) return;
-      const keys = await this._client.keys(pattern);
+      // SCAN instead of KEYS: KEYS scans the whole keyspace synchronously
+      // and blocks the Redis event loop - O(N) on every call, which with a
+      // large cache stalls ALL commands (including health checks) while it
+      // runs. SCAN iterates in bounded chunks, keeping Redis responsive.
+      let cursor = '0';
+      const keys = [];
+      do {
+        const [next, batch] = await this._client.scan(cursor, 'MATCH', pattern, 'COUNT', 500);
+        cursor = next;
+        keys.push(...batch);
+      } while (cursor !== '0');
       if (keys.length > 0) {
         await this._client.del(...keys);
       }

@@ -2,11 +2,17 @@
 
 // index.js
 //
-// Backward-compatible entry point. The application itself lives in src/app.js;
-// this file exists so `node index.js` (package.json start script, Docker CMD,
-// platform start commands) and `require('./index')` from legacy tests keep
-// working against the single canonical app. Run `node src/server.js` for the
-// full server with WebSocket support.
+// Thin compatibility entry point. The real server lives in src/server.js:
+// socket.io wiring, service initialization (cache/queue/scheduler/WS),
+// socket timeouts, the retention sweeper, and the graceful shutdown path
+// all live there. Running the app directly with app.listen() here - as this
+// file once did - produced a degraded server that looked identical but had
+// NO background services and NO graceful shutdown; it is also the image's
+// CMD, so containers would boot forever failing /health/ready (services
+// never initialized).
+//
+// Requiring this file (tests do) still yields the Express app.
+// Running `node index.js` now boots the full server via startServer().
 
 const app = require('./src/app');
 
@@ -25,25 +31,8 @@ if (
 }
 
 if (require.main === module) {
-  const config = require('./src/config');
-  const { childLogger } = require('./src/config/logger');
-  const log = childLogger('server');
-
-  const server = app.listen(config.port, config.host, () => {
-    log.info(
-      { port: config.port, env: config.env, contractId: config.contractId },
-      'Equipchain API server started'
-    );
-  });
-
-  server.on('error', (error) => {
-    if (error.code === 'EADDRINUSE') {
-      log.error({ port: config.port }, 'Port already in use');
-    } else {
-      log.error({ error }, 'Server error');
-    }
-    process.exit(1);
-  });
+  const { startServer } = require('./src/server');
+  startServer();
 }
 
 module.exports = app;

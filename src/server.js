@@ -55,6 +55,14 @@ async function startServer() {
     // in-memory store cannot grow without bound while the server runs.
     startRetentionSweeper();
 
+    // Bound request lifecycle: without these, a client that opens a
+    // socket and dribbles bytes (slowloris) or a handler that never
+    // responds pins the socket and, over time, exhausts the pool.
+    server.keepAliveTimeout = 5000; // below most LB/proxy idle timeouts (65s default here)
+    server.headersTimeout = 6000; // must exceed keepAliveTimeout
+    server.requestTimeout = 30000; // whole-request budget incl. body
+    server.timeout = 0; // response streaming (exports) may exceed defaults; managed per-request
+
     // Start listening
     server.listen(config.port, config.host, () => {
       log.info(

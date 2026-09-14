@@ -3,11 +3,11 @@ const { childLogger } = require('../config/logger');
 const { getReadings, aggregateReadings, fleetSummary, comparePeriods } = require('../services/aggregator');
 const { validate } = require('../middleware/validate');
 const {
-  dailySummaryQuerySchema,
-  monthlySummaryQuerySchema,
-  customRangeQuerySchema,
-  fleetSummaryQuerySchema,
-} = require('../schemas/validation.schema');
+  dailySummarySchema,
+  monthlySummarySchema,
+  customRangeSchema,
+  fleetSummarySchema,
+} = require('../schemas/analytics.schema');
 
 const router = Router();
 const log = childLogger('analytics');
@@ -156,9 +156,9 @@ function sendAggregatedResponse(req, res, schema, granularity) {
  *       200: { description: Daily aggregation result }
  *       400: { description: Validation failed }
  */
-router.get('/daily-summary', validate(dailySummaryQuerySchema), (req, res, next) => {
+router.get('/daily-summary', validate(dailySummarySchema), (req, res, next) => {
   try {
-    sendAggregatedResponse(req, res, dailySummaryQuerySchema.query, 'day');
+    sendAggregatedResponse(req, res, dailySummarySchema, 'day');
   } catch (err) {
     log.error({ err }, 'daily-summary error');
     next(err);
@@ -194,9 +194,9 @@ router.get('/daily-summary', validate(dailySummaryQuerySchema), (req, res, next)
  *       200: { description: Monthly aggregation result }
  *       400: { description: Validation failed }
  */
-router.get('/monthly-summary', validate(monthlySummaryQuerySchema), (req, res, next) => {
+router.get('/monthly-summary', validate(monthlySummarySchema), (req, res, next) => {
   try {
-    sendAggregatedResponse(req, res, monthlySummaryQuerySchema.query, 'month');
+    sendAggregatedResponse(req, res, monthlySummarySchema, 'month');
   } catch (err) {
     log.error({ err }, 'monthly-summary error');
     next(err);
@@ -233,9 +233,9 @@ router.get('/monthly-summary', validate(monthlySummaryQuerySchema), (req, res, n
  *       200: { description: Custom-range aggregation result }
  *       400: { description: Validation failed }
  */
-router.get('/custom-range', validate(customRangeQuerySchema), (req, res, next) => {
+router.get('/custom-range', validate(customRangeSchema), (req, res, next) => {
   try {
-    const { parsed, errors } = parseQuery(customRangeQuerySchema.query, req.query);
+    const { parsed, errors } = parseQuery(customRangeSchema, req.query);
     if (errors) {
       return res.status(400).json({ error: 'Validation failed', details: errors });
     }
@@ -294,9 +294,9 @@ router.get('/custom-range', validate(customRangeQuerySchema), (req, res, next) =
  *       200: { description: Fleet summary }
  *       400: { description: Validation failed }
  */
-router.get('/fleet-summary', validate(fleetSummaryQuerySchema), (req, res, next) => {
+router.get('/fleet-summary', validate(fleetSummarySchema), (req, res, next) => {
   try {
-    const { parsed, errors } = parseQuery(fleetSummaryQuerySchema.query, req.query);
+    const { parsed, errors } = parseQuery(fleetSummarySchema, req.query);
     if (errors) {
       return res.status(400).json({ error: 'Validation failed', details: errors });
     }

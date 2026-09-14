@@ -97,10 +97,17 @@ function addReadings(data) {
   }));
   readings.push(...stored);
 
-  // Broadcast new readings to real-time WebSocket subscribers.
+  // Broadcast new readings to real-time WebSocket subscribers. Batch shape
+  // mirrors the ingest: single reading -> single event, batch -> one
+  // 'meter:readings' batch event per meter plus per-meter fan-out, so the
+  // dev seed (6,480 readings) emits ~3 batch events instead of 6,480.
   try {
     const websocket = require('./websocket');
-    stored.forEach((reading) => websocket.broadcastMeterReading(reading));
+    if (stored.length === 1) {
+      websocket.broadcastMeterReading(stored[0]);
+    } else {
+      websocket.broadcastMeterReadingsBatch(stored);
+    }
   } catch (err) {
     // Broadcasting is best-effort; never block ingestion on WS failures.
   }

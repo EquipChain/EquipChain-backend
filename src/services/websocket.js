@@ -47,4 +47,34 @@ function broadcastMeterReading(reading) {
   io.emit('meter:reading', reading);
 }
 
-module.exports = { initWebSocket, getConnectionCount, getConnections, broadcastMeterReading };
+/**
+ * Broadcast a batch of readings efficiently: one batch event per meter
+ * room plus a single fleet-wide batch event. Clients subscribed to a meter
+ * receive 'meter:readings' (array); everyone receives the fleet batch.
+ *
+ * Why: addReadings() is called with large arrays (the dev seed emits 6,480
+ * readings at boot; production ingest is batched). Emitting per reading
+ * produced one socket.io packet per item - thousands of broadcasts where
+ * one will do - pinning CPU and flooding subscribers at startup.
+ *
+ * @param {object[]} readings - Array of meter reading payloads
+ */
+function broadcastMeterReadingsBatch(readings) {
+  if (!io || !Array.isArray(readings) || readings.length === 0) return;
+
+  const byMeter = new Map();
+  for (const reading of readings) {
+    if (!reading || !reading.meterId) continue;
+    if (!byMeter.has(reading.meterId)) {
+      byMeter.set(reading.meterId, []);
+    }
+    byMeter.get(reading.meterId).push(reading);
+  }
+
+  for (const [meterId, meterReadings] of byMeter) {
+    io.to(`meter:${meterId}`).emit('meter:readings', meterReadings);
+  }
+  io.emit('meter:readings', readings);
+}
+
+module.exports = { initWebSocket, getConnectionCount, getConnections, broadcastMeterReading, broadcastMeterReadingsBatch };

@@ -150,6 +150,24 @@ app.use((req, res, next) => {
 });
 app.use('/api', rateLimiter);
 
+// Dedicated strict limiter on the token-minting endpoint. Token forgery by
+// brute force is a different threat from API scraping: the cost of a guess
+// is a credential, not a data row, so the ceiling must be far lower than
+// any data-serving tier. Keyed per IP (challenge clients pre-auth are
+// anonymous); 5 attempts/minute breaks online guessing without affecting
+// normal logins, and composes with the tier limiter above.
+const { createRateLimiter } = require('./middleware/rateLimiter');
+app.use(
+  '/api/auth/challenge',
+  createRateLimiter({
+    tierOverride: 'free',
+    keyPrefix: 'authchallenge',
+    windowMs: 60_000,
+    max: 5,
+    message: 'Too many authentication attempts. Try again in a minute.',
+  })
+);
+
 // ─── Correlation ID + request logging ────────────────────────────────────────
 
 app.use((req, res, next) => {

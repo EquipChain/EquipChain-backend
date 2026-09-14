@@ -120,14 +120,18 @@ function determineTier(req) {
  * @param {string} tier
  * @returns {string}
  */
-function _buildKey(req, tier) {
+function _buildKey(req, tier, keyPrefix) {
   const identity =
     req.user?.sub ??
     req.user?.id ??
     req.apiKey?.key ??
     req.ip ??
     'anonymous';
-  return `${tier}:${identity}`;
+  // keyPrefix isolates a limiter's counters from the shared tier store -
+  // without it, two limiters on the same request path (tier limiter + a
+  // stricter endpoint limiter) increment ONE counter twice per request and
+  // trip both limits at half their configured budgets.
+  return keyPrefix ? `${tier}:${keyPrefix}:${identity}` : `${tier}:${identity}`;
 }
 
 // ─── Core middleware factory ──────────────────────────────────────────────────
@@ -142,7 +146,19 @@ function _buildKey(req, tier) {
 function createRateLimiter(opts = {}) {
   return function rateLimiterMiddleware(req, res, next) {
     const tier = opts.tierOverride ?? determineTier(req);
-    const tierConfig = RATE_LIMIT_TIERS[tier];
+    let tierConfig = RATE_LIMIT_TIERS[tier];
+
+    // Per-call overrides let specific endpoints apply stricter budgets
+    // (e.g. the auth challenge's brute-force guard) without defining a
+    // new named tier for every case.
+    if (opts.max !== undefined || opts.windowMs !== undefined) {
+      tierConfig = {
+        ...tierConfig,
+        ...(opts.max !== undefined ? { max: opts.max } : {}),
+        ...(opts.windowMs !== undefined ? { windowMs: opts.windowMs } : {}),
+        ...(opts.message !== undefined ? { message: opts.message } : {}),
+      };
+    }
 
     if (!tierConfig) {
       // Unknown tier — fail open to avoid blocking legitimate traffic
@@ -151,7 +167,7 @@ function createRateLimiter(opts = {}) {
 
     const { windowMs, max, message } = tierConfig;
     const now = Date.now();
-    const key = _buildKey(req, tier);
+    const key = _buildKey(req, tier, opts.keyPrefix);
 
     // Retrieve or initialise the window for this key
     let entry = _store.get(key);

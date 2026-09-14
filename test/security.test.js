@@ -2,6 +2,7 @@ const { describe, it, after } = require('node:test');
 const assert = require('node:assert');
 
 const app = require('../src/app');
+const { _resetStore } = require('../src/middleware/rateLimiter');
 const server = app.listen(0);
 
 after(() => server.close());
@@ -72,6 +73,27 @@ describe('Security Tests', () => {
       });
       assert.strictEqual(res.status, 200);
       assert.strictEqual(({}).x, undefined);
+    });
+  });
+
+  describe('Brute-force guard on token minting', () => {
+    it('caps /api/auth/challenge at 5 attempts/minute per IP, isolated from the tier limiter', async () => {
+      // Earlier tests in this file consumed limiter budget; start clean.
+      _resetStore();
+      const port = server.address().port;
+      const statuses = [];
+      for (let i = 0; i < 7; i++) {
+        const res = await fetch(`http://localhost:${port}/api/auth/challenge`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ wallet: `stress-${i}` }),
+        });
+        statuses.push(res.status);
+      }
+      const allowed = statuses.filter((s) => s === 200).length;
+      const throttled = statuses.filter((s) => s === 429).length;
+      assert.strictEqual(allowed, 5, `exactly 5 attempts allowed (got ${allowed})`);
+      assert.strictEqual(throttled, 2, 'attempts beyond 5 must be throttled');
     });
   });
 

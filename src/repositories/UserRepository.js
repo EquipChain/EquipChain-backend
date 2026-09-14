@@ -1,28 +1,26 @@
-import { BaseRepository, BaseEntity, QueryParams } from './BaseRepository';
+'use strict';
 
-export interface UserEntity extends BaseEntity {
-  email: string;
-  name: string;
-  role: string;
-  status: string;
-  publicKey: string;
-}
+// src/repositories/UserRepository.js
+// CommonJS port of UserRepository.ts (part of restoring the broken
+// repository layer after the unfinished TypeScript migration).
 
-export class UserRepository extends BaseRepository<UserEntity> {
+const BaseRepository = require('./BaseRepository');
+
+class UserRepository extends BaseRepository {
   constructor() {
     super({ entityName: 'user' });
     this._allowedFilters = ['role', 'status'];
     this._sortableFields = ['email', 'role', 'createdAt', 'updatedAt'];
     this._searchableFields = ['email', 'name'];
-    this._defaultSort = { field: 'createdAt', order: 'desc' as const };
+    this._defaultSort = { field: 'createdAt', order: 'desc' };
 
     this._seedDefaults();
   }
 
-  private _seedDefaults(): void {
+  _seedDefaults() {
     if (this._store.size === 0) {
       const now = new Date().toISOString();
-      const admin: UserEntity = {
+      const admin = {
         id: this._generateId(),
         email: 'admin@equipchain.io',
         name: 'EquipChain Admin',
@@ -36,7 +34,11 @@ export class UserRepository extends BaseRepository<UserEntity> {
     }
   }
 
-  async findByEmail(email: string): Promise<UserEntity | null> {
+  /**
+   * @param {string} email
+   * @returns {Promise<Object|null>}
+   */
+  async findByEmail(email) {
     for (const user of this._store.values()) {
       if (user.email === email) {
         return { ...user };
@@ -45,7 +47,11 @@ export class UserRepository extends BaseRepository<UserEntity> {
     return null;
   }
 
-  async findByPublicKey(publicKey: string): Promise<UserEntity | null> {
+  /**
+   * @param {string} publicKey
+   * @returns {Promise<Object|null>}
+   */
+  async findByPublicKey(publicKey) {
     for (const user of this._store.values()) {
       if (user.publicKey === publicKey) {
         return { ...user };
@@ -55,4 +61,6 @@ export class UserRepository extends BaseRepository<UserEntity> {
   }
 }
 
-export const userRepository = new UserRepository();
+module.exports = UserRepository;
+module.exports.UserRepository = UserRepository;
+module.exports.userRepository = new UserRepository();

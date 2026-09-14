@@ -1,19 +1,12 @@
-import { BaseRepository, BaseEntity } from './BaseRepository';
+'use strict';
 
-export interface DeviceEntity extends BaseEntity {
-  meterId: string;
-  name: string;
-  type: string;
-  location: string;
-  status: string;
-  lastReading: any | null;
-  config: {
-    baseLoad: number;
-    interval: number;
-  };
-}
+// src/repositories/DeviceRepository.js
+// CommonJS port of DeviceRepository.ts (part of restoring the broken
+// repository layer after the unfinished TypeScript migration).
 
-const DEFAULT_DEVICES: Omit<DeviceEntity, 'id' | 'createdAt' | 'updatedAt'>[] = [
+const BaseRepository = require('./BaseRepository');
+
+const DEFAULT_DEVICES = [
   {
     meterId: 'METER-001',
     name: 'Main Building',
@@ -43,22 +36,22 @@ const DEFAULT_DEVICES: Omit<DeviceEntity, 'id' | 'createdAt' | 'updatedAt'>[] = 
   },
 ];
 
-export class DeviceRepository extends BaseRepository<DeviceEntity> {
+class DeviceRepository extends BaseRepository {
   constructor() {
     super({ entityName: 'device' });
     this._allowedFilters = ['type', 'status', 'location'];
     this._sortableFields = ['meterId', 'name', 'type', 'status', 'createdAt'];
     this._searchableFields = ['name', 'meterId', 'location'];
-    this._defaultSort = { field: 'meterId', order: 'asc' as const };
+    this._defaultSort = { field: 'meterId', order: 'asc' };
 
     this._seedDefaults();
   }
 
-  private _seedDefaults(): void {
+  _seedDefaults() {
     if (this._store.size === 0) {
       const now = new Date().toISOString();
       for (const device of DEFAULT_DEVICES) {
-        const entity: DeviceEntity = {
+        const entity = {
           id: this._generateId(),
           ...device,
           createdAt: now,
@@ -69,7 +62,11 @@ export class DeviceRepository extends BaseRepository<DeviceEntity> {
     }
   }
 
-  async findByMeterId(meterId: string): Promise<DeviceEntity | null> {
+  /**
+   * @param {string} meterId
+   * @returns {Promise<Object|null>}
+   */
+  async findByMeterId(meterId) {
     for (const device of this._store.values()) {
       if (device.meterId === meterId) {
         return { ...device };
@@ -78,19 +75,25 @@ export class DeviceRepository extends BaseRepository<DeviceEntity> {
     return null;
   }
 
-  async findByStatus(status: string): Promise<DeviceEntity[]> {
+  /**
+   * @param {string} status
+   * @returns {Promise<Object[]>}
+   */
+  async findByStatus(status) {
     return [...this._store.values()]
       .filter((d) => d.status === status)
       .map((d) => ({ ...d }));
   }
 
-  async findOnline(): Promise<DeviceEntity[]> {
+  async findOnline() {
     return this.findByStatus('online');
   }
 
-  async findOffline(): Promise<DeviceEntity[]> {
+  async findOffline() {
     return this.findByStatus('offline');
   }
 }
 
-export const deviceRepository = new DeviceRepository();
+module.exports = DeviceRepository;
+module.exports.DeviceRepository = DeviceRepository;
+module.exports.deviceRepository = new DeviceRepository();

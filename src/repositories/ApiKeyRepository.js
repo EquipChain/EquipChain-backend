@@ -1,16 +1,13 @@
-import * as crypto from 'crypto';
-import { BaseRepository, BaseEntity } from './BaseRepository';
+'use strict';
 
-export interface ApiKeyEntity extends BaseEntity {
-  key: string;
-  name: string;
-  userId: string;
-  status: string;
-  permissions: string[];
-  expiresAt: string;
-}
+// src/repositories/ApiKeyRepository.js
+// CommonJS port of ApiKeyRepository.ts (part of restoring the broken
+// repository layer after the unfinished TypeScript migration).
 
-export class ApiKeyRepository extends BaseRepository<ApiKeyEntity> {
+const crypto = require('crypto');
+const BaseRepository = require('./BaseRepository');
+
+class ApiKeyRepository extends BaseRepository {
   constructor() {
     super({ entityName: 'apiKey' });
     this._allowedFilters = ['status', 'userId'];
@@ -20,14 +17,18 @@ export class ApiKeyRepository extends BaseRepository<ApiKeyEntity> {
     this._seedDefaults();
   }
 
-  static generateKey(): string {
+  /**
+   * Generate a cryptographically random API key.
+   * @returns {string}
+   */
+  static generateKey() {
     return `ek_${crypto.randomBytes(32).toString('hex')}`;
   }
 
-  private _seedDefaults(): void {
+  _seedDefaults() {
     if (this._store.size === 0) {
       const now = new Date().toISOString();
-      const devKey: ApiKeyEntity = {
+      const devKey = {
         id: this._generateId(),
         key: 'ek_dev_equipchain_default_key',
         name: 'Development Key',
@@ -42,7 +43,11 @@ export class ApiKeyRepository extends BaseRepository<ApiKeyEntity> {
     }
   }
 
-  async findByKey(key: string): Promise<ApiKeyEntity | null> {
+  /**
+   * @param {string} key
+   * @returns {Promise<Object|null>}
+   */
+  async findByKey(key) {
     for (const apiKey of this._store.values()) {
       if (apiKey.key === key) {
         return { ...apiKey };
@@ -51,35 +56,57 @@ export class ApiKeyRepository extends BaseRepository<ApiKeyEntity> {
     return null;
   }
 
-  async findByUserId(userId: string): Promise<ApiKeyEntity[]> {
+  /**
+   * @param {string} userId
+   * @returns {Promise<Object[]>}
+   */
+  async findByUserId(userId) {
     return [...this._store.values()]
       .filter((k) => k.userId === userId)
       .map((k) => ({ ...k }));
   }
 
-  async revokeKey(key: string): Promise<ApiKeyEntity | null> {
+  /**
+   * Revoke a key by its secret value.
+   * @param {string} key
+   * @returns {Promise<Object|null>}
+   */
+  async revokeKey(key) {
     const apiKey = await this.findByKey(key);
     if (!apiKey) return null;
-    return this.update(apiKey.id, { status: 'revoked' } as Partial<ApiKeyEntity>);
+    return this.update(apiKey.id, { status: 'revoked' });
   }
 
-  async findActive(): Promise<ApiKeyEntity[]> {
+  /**
+   * Keys that are active and unexpired at the current instant.
+   * @returns {Promise<Object[]>}
+   */
+  async findActive() {
     const now = new Date().toISOString();
     return [...this._store.values()]
       .filter((k) => k.status === 'active' && k.expiresAt > now)
       .map((k) => ({ ...k }));
   }
 
-  async create(data: Partial<ApiKeyEntity>): Promise<ApiKeyEntity> {
+  /**
+   * Create an API key, generating a secret and applying defaults.
+   * @param {Object} data
+   * @returns {Promise<Object>}
+   */
+  async create(data) {
     const key = data.key || ApiKeyRepository.generateKey();
     return super.create({
       ...data,
       key,
       status: data.status || 'active',
       permissions: data.permissions || ['read'],
-      expiresAt: data.expiresAt || new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
-    } as any);
+      expiresAt:
+        data.expiresAt ||
+        new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString(),
+    });
   }
 }
 
-export const apiKeyRepository = new ApiKeyRepository();
+module.exports = ApiKeyRepository;
+module.exports.ApiKeyRepository = ApiKeyRepository;
+module.exports.apiKeyRepository = new ApiKeyRepository();

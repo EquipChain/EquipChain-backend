@@ -1,13 +1,12 @@
-import { BaseRepository, BaseEntity } from './BaseRepository';
+'use strict';
 
-export interface ConfigEntity extends BaseEntity {
-  key: string;
-  value: string;
-  group: string;
-  description: string;
-}
+// src/repositories/ConfigRepository.js
+// CommonJS port of ConfigRepository.ts (part of restoring the broken
+// repository layer after the unfinished TypeScript migration).
 
-const DEFAULT_CONFIG: Record<string, string> = {
+const BaseRepository = require('./BaseRepository');
+
+const DEFAULT_CONFIG = {
   'app.name': 'EquipChain API',
   'app.version': '1.0.0',
   'app.description': 'Utility meter monitoring and data access platform',
@@ -28,7 +27,7 @@ const DEFAULT_CONFIG: Record<string, string> = {
   'monitoring.otelEnabled': 'true',
 };
 
-export class ConfigRepository extends BaseRepository<ConfigEntity> {
+class ConfigRepository extends BaseRepository {
   constructor() {
     super({ entityName: 'config' });
     this._allowedFilters = ['group'];
@@ -38,12 +37,12 @@ export class ConfigRepository extends BaseRepository<ConfigEntity> {
     this._seedDefaults();
   }
 
-  private _seedDefaults(): void {
+  _seedDefaults() {
     if (this._store.size === 0) {
       const now = new Date().toISOString();
       for (const [key, value] of Object.entries(DEFAULT_CONFIG)) {
         const group = key.split('.')[0];
-        const entity: ConfigEntity = {
+        const entity = {
           id: this._generateId(),
           key,
           value,
@@ -57,7 +56,11 @@ export class ConfigRepository extends BaseRepository<ConfigEntity> {
     }
   }
 
-  async get(key: string): Promise<string | null> {
+  /**
+   * @param {string} key
+   * @returns {Promise<string|null>}
+   */
+  async get(key) {
     for (const config of this._store.values()) {
       if (config.key === key) {
         return config.value;
@@ -66,26 +69,48 @@ export class ConfigRepository extends BaseRepository<ConfigEntity> {
     return null;
   }
 
-  async set(key: string, value: string): Promise<ConfigEntity> {
+  /**
+   * Set (update or insert) a config value.
+   * @param {string} key
+   * @param {string} value
+   * @returns {Promise<Object>}
+   */
+  async set(key, value) {
     for (const config of this._store.values()) {
       if (config.key === key) {
-        return this.update(config.id, { value } as Partial<ConfigEntity>) as Promise<ConfigEntity>;
+        return this.update(config.id, { value });
       }
     }
 
     const group = key.split('.')[0];
-    return this.create({ key, value, group } as any);
+    return this.create({ key, value, group });
   }
 
-  async getByGroup(group: string): Promise<Array<{ key: string; value: string }>> {
+  /**
+   * @param {string} group
+   * @returns {Promise<Array<{ key: string, value: string }>>} sorted by key
+   */
+  async getByGroup(group) {
     return [...this._store.values()]
       .filter((c) => c.group === group)
       .map((c) => ({ key: c.key, value: c.value }))
       .sort((a, b) => a.key.localeCompare(b.key));
   }
 
-  async getAllConfig(): Promise<Record<string, string>> {
-    const result: Record<string, string> = {};
+  /**
+   * All config as a flat key→value map. Overrides BaseRepository#getAll,
+   * whose array-of-entities shape is not useful for config lookup.
+   * @returns {Promise<Record<string, string>>}
+   */
+  async getAll() {
+    return this.getAllConfig();
+  }
+
+  /**
+   * @returns {Promise<Record<string, string>>}
+   */
+  async getAllConfig() {
+    const result = {};
     for (const config of this._store.values()) {
       result[config.key] = config.value;
     }
@@ -93,4 +118,6 @@ export class ConfigRepository extends BaseRepository<ConfigEntity> {
   }
 }
 
-export const configRepository = new ConfigRepository();
+module.exports = ConfigRepository;
+module.exports.ConfigRepository = ConfigRepository;
+module.exports.configRepository = new ConfigRepository();

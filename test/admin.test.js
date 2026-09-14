@@ -190,6 +190,29 @@ describe('Admin API - devices', () => {
   });
 });
 
+describe('Admin API - device uniqueness', () => {
+  it('rejects duplicate deviceId registration with 409', async () => {
+    const first = await request('POST', '/api/admin/devices', {
+      token: adminToken,
+      body: { deviceId: 'dup-meter', name: 'First' },
+    });
+    assert.strictEqual(first.status, 201);
+
+    const second = await request('POST', '/api/admin/devices', {
+      token: adminToken,
+      body: { deviceId: 'dup-meter', name: 'Second' },
+    });
+    assert.strictEqual(second.status, 409);
+    assert.strictEqual(second.data.error, 'Device already exists');
+
+    // Only the original record remains.
+    const listed = await request('GET', '/api/admin/devices', { token: adminToken });
+    const dups = listed.data.data.filter((d) => d.deviceId === 'dup-meter');
+    assert.strictEqual(dups.length, 1);
+    assert.strictEqual(dups[0].name, 'First');
+  });
+});
+
 describe('Admin API - system', () => {
   it('reports health', async () => {
     const res = await request('GET', '/api/admin/system/health', { token: adminToken });

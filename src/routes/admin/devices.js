@@ -42,6 +42,19 @@ const DEVICE_LIST_OPTIONS = {
  *       400: { description: Validation failed }
  */
 router.post('/', validate(adminRegisterDeviceSchema), (req, res) => {
+  // deviceId is the device's external identity: registering the same one
+  // twice would silently fork its record and make every later update/delete
+  // ambiguous. Enforce uniqueness with a 409 (conflict) rather than a 400 -
+  // the request is well-formed, it just collides with existing state.
+  const existing = deviceStore
+    .list()
+    .find((d) => d.deviceId === req.body.deviceId);
+  if (existing) {
+    return res.status(409).json({
+      error: 'Device already exists',
+      message: `A device with deviceId "${req.body.deviceId}" is already registered.`,
+    });
+  }
   res.status(201).json(deviceStore.create(req.body));
 });
 

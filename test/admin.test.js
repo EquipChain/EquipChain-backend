@@ -194,6 +194,32 @@ describe('Admin API - devices', () => {
   });
 });
 
+describe('Admin API - user uniqueness', () => {
+  it('rejects duplicate email with 409 (case-insensitive)', async () => {
+    const first = await request('POST', '/api/admin/users', {
+      token: adminToken,
+      body: { email: 'dup@example.com', name: 'First' },
+    });
+    assert.strictEqual(first.status, 201);
+
+    const sameCase = await request('POST', '/api/admin/users', {
+      token: adminToken,
+      body: { email: 'dup@example.com', name: 'Dup Same' },
+    });
+    assert.strictEqual(sameCase.status, 409);
+
+    const diffCase = await request('POST', '/api/admin/users', {
+      token: adminToken,
+      body: { email: 'DUP@EXAMPLE.COM', name: 'Dup Upper' },
+    });
+    assert.strictEqual(diffCase.status, 409);
+
+    const listed = await request('GET', '/api/admin/users', { token: adminToken });
+    const dups = listed.data.data.filter((u) => u.email.toLowerCase() === 'dup@example.com');
+    assert.strictEqual(dups.length, 1);
+  });
+});
+
 describe('Admin API - device uniqueness', () => {
   it('rejects duplicate deviceId registration with 409', async () => {
     const first = await request('POST', '/api/admin/devices', {

@@ -25,6 +25,7 @@
 
 const { childLogger } = require('../config/logger');
 const { RATE_LIMIT_TIERS, PREMIUM_API_KEY_TIERS } = require('../config/rateLimits');
+const { configStore } = require('../data/adminStore');
 
 const log = childLogger('rate-limiter');
 
@@ -163,6 +164,18 @@ function createRateLimiter(opts = {}) {
     if (!tierConfig) {
       // Unknown tier — fail open to avoid blocking legitimate traffic
       return next();
+    }
+
+    // Global per-minute ceiling from the admin-configurable runtime config
+    // (PATCH /api/admin/config -> rateLimitPerMinute). Applied as a CEILING:
+    // lowering it tightens every tier immediately (no restart - the value
+    // is read per request, the same live-read pattern as the maintenance
+    // gate), raising it only loosens tiers below it. This gives the stored
+    // setting real teeth: previously it was written and audited but never
+    // consumed by anything.
+    const runtimeCeiling = configStore.get().rateLimitPerMinute;
+    if (Number.isFinite(runtimeCeiling) && runtimeCeiling > 0) {
+      tierConfig = { ...tierConfig, max: Math.min(tierConfig.max, runtimeCeiling) };
     }
 
     const { windowMs, max, message } = tierConfig;

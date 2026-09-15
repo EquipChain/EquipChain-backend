@@ -17,6 +17,15 @@ const defaultConfig = { rateLimitPerMinute: 60, maintenanceMode: false };
 let config = { ...defaultConfig };
 let configAuditLog = [];
 
+// Mutable-key whitelist. configStore.update spreads arbitrary client JSON
+// into the live config object: today the schema restricts values to
+// string/number/boolean, but ANY future reader that trusts config's shape
+// (or an admin client that guesses a key like "__proto__"-safe but
+// unvalidated) could inject keys nobody consumes or, worse, shadow keys
+// future code adds. Whitelisting at the store makes the stored shape
+// closed regardless of what the schema allows.
+const MUTABLE_CONFIG_KEYS = new Set(Object.keys(defaultConfig));
+
 // Audit log cap: this log is only for admin inspection, so keeping the most
 // recent entries is sufficient. Without a cap, a long-lived process with
 // periodic config writes grows the array forever (slow memory leak).
@@ -87,8 +96,19 @@ const deviceStore = {
 const configStore = {
   get: () => config,
   update: (updates, adminId) => {
-    config = { ...config, ...updates };
-    _appendAudit({ admin: adminId, changes: updates });
+    // Only whitelisted keys land; unknown keys are ignored (and reported in
+    // the audit entry's `ignored` list so admins see what didn't apply).
+    const applied = {};
+    const ignored = [];
+    for (const [key, value] of Object.entries(updates || {})) {
+      if (MUTABLE_CONFIG_KEYS.has(key)) {
+        applied[key] = value;
+      } else {
+        ignored.push(key);
+      }
+    }
+    config = { ...config, ...applied };
+    _appendAudit({ admin: adminId, changes: applied, ...(ignored.length > 0 ? { ignored } : {}) });
     return config;
   },
   reset: (adminId) => {

@@ -36,6 +36,14 @@ class WebhookService {
    * @param {string} url - Target webhook URL
    * @param {Object} payload - Webhook payload
    * @param {Object} options - Delivery options
+   * @param {string} [options.webhookId] - Registered webhook record id. When
+   *   provided, the delivery job resolves the record at send time to sign
+   *   the payload with its secret and to honour the pause flag. Secrets are
+   *   deliberately NOT carried in job data: job payloads persist to disk
+   *   snapshots when queue durability is enabled, and signing material
+   *   must not outlive the process heap.
+   * @param {number} [options.priority] - Queue priority (default 2)
+   * @param {number} [options.maxAttempts] - Retry ladder depth (default 3)
    * @returns {string} Job ID
    */
   async deliver(url, payload, options = {}) {
@@ -44,9 +52,9 @@ class WebhookService {
       throw new Error('Queue service unavailable: cannot queue webhook delivery');
     }
 
-    const webhookId = `webhook_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
+    const webhookId = options.webhookId || `webhook_${Date.now()}_${Math.random().toString(36).slice(2, 11)}`;
     
-    log.info({ webhookId, url }, 'Queuing webhook for delivery');
+    log.info({ webhookId, url, registered: Boolean(options.webhookId) }, 'Queuing webhook for delivery');
 
     // Add webhook retry job to queue
     const jobId = queueInstance.add('webhookRetry', {

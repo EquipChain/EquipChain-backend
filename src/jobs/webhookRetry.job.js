@@ -14,6 +14,7 @@
 const http = require('http');
 const https = require('https');
 const net = require('net');
+const crypto = require('crypto');
 const { childLogger } = require('../config/logger');
 const { webhookRepository } = require('../repositories/WebhookRepository');
 
@@ -66,11 +67,35 @@ function dnsLookup(hostname, cb) {
 }
 
 /**
+ * HMAC-SHA256 signature over "<unix_seconds>.<raw_body>".
+ *
+ * The timestamp is inside the signed material, so a replayed payload cannot
+ * carry a fresh timestamp without invalidating the signature: a receiver
+ * that checks both the HMAC and that the timestamp is within a small
+ * tolerance (e.g. 5 minutes) of its own clock defeats capture-and-replay
+ * of webhook deliveries. Separating the concerns - body integrity via the
+ * HMAC, freshness via the timestamp - is the same scheme Stripe uses for
+ * outbound webhooks, so receivers can reuse standard verification code.
+ *
+ * @param {string} rawBody - The exact serialized body that will be sent
+ * @param {string} secret - Webhook signing secret
+ * @param {number} timestampSec - Unix seconds; signed, not trusted
+ * @returns {string} hex digest
+ */
+function signDelivery(rawBody, secret, timestampSec) {
+  return crypto.createHmac('sha256', secret).update(`${timestampSec}.${rawBody}`).digest('hex');
+}
+
+/**
  * POST the payload to the target URL with redirects followed (public hosts
  * only) and a hard timeout.
+ * @param {string} urlString
+ * @param {Object} payload
+ * @param {{ secret?: string|null }} [opts] - signing material
+ * @param {number} [redirectsLeft]
  * @returns {Promise<{ statusCode: number, body: string }>}
  */
-function postJson(urlString, payload, redirectsLeft = MAX_REDIRECTS) {
+function postJson(urlString, payload, opts = {}, redirectsLeft = MAX_REDIRECTS) {
   return new Promise((resolve, reject) => {
     let url;
     try {
@@ -83,20 +108,40 @@ function postJson(urlString, payload, redirectsLeft = MAX_REDIRECTS) {
       return reject(new Error(`Unsupported webhook protocol: ${url.protocol}`));
     }
 
-    assertPublicHost(url.hostname).catch(reject);
+    // Transport injection exists so tests can run a local receiver: the
+    // SSRF guard (correctly) refuses loopback/private targets, so tests
+    // substitute a loopback-capable transport instead of weakening the
+    // guard with a bypass flag. The handler only forwards a transport
+    // outside production-tested flows when config.isTest, so a crafted job
+    // payload cannot redirect deliveries in production. The injected
+    // transport owns host policy for its call - hence no assertPublicHost.
+    if (!opts.transport) {
+      assertPublicHost(url.hostname).catch(reject);
+    }
 
-    const transport = url.protocol === 'https:' ? https : http;
+    const transport =
+      opts.transport || (url.protocol === 'https:' ? https : http);
     const body = JSON.stringify(payload);
+
+    // Sign the EXACT byte sequence being sent - receivers verify against
+    // the raw request body, so the signature must be computed over the same
+    // serialized string, not a re-serialization. Fresh timestamp per hop:
+    // a redirect chain that lingers must not ship a stale signed instant.
+    const headers = {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(body),
+      'User-Agent': 'EquipChain-Webhook/1.0',
+    };
+    if (opts.secret) {
+      const t = Math.floor(Date.now() / 1000);
+      headers['x-equipchain-signature'] = `t=${t},v1=${signDelivery(body, opts.secret, t)}`;
+    }
 
     const req = transport.request(
       url,
       {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(body),
-          'User-Agent': 'EquipChain-Webhook/1.0',
-        },
+        headers,
         timeout: DELIVERY_TIMEOUT_MS,
       },
       (res) => {
@@ -108,7 +153,7 @@ function postJson(urlString, payload, redirectsLeft = MAX_REDIRECTS) {
             return resolve({ statusCode: res.statusCode, body: '' });
           }
           const next = new URL(location, url).toString();
-          return resolve(postJson(next, payload, redirectsLeft - 1));
+          return resolve(postJson(next, payload, opts, redirectsLeft - 1));
         }
 
         let data = '';
@@ -146,10 +191,41 @@ function postJson(urlString, payload, redirectsLeft = MAX_REDIRECTS) {
 async function webhookRetryHandler(data) {
   const { webhookId, url, payload } = data;
 
-  log.info({ webhookId, url }, 'Delivering webhook');
+  // Resolve the registered webhook: pull its signing secret (deliveries to
+  // registered webhooks are signed) and honour the pause flag. An unknown
+  // webhookId still delivers - the service API allows ad-hoc deliveries
+  // that never went through registration - it just ships unsigned.
+  let secret = null;
+  try {
+    const record = await webhookRepository.findById(webhookId);
+    if (record) {
+      if (record.status === 'inactive') {
+        log.info({ webhookId, url }, 'Webhook is inactive; skipping delivery');
+        return {
+          webhookId,
+          url,
+          skipped: true,
+          reason: 'webhook-inactive',
+          skippedAt: new Date().toISOString(),
+        };
+      }
+      secret = record.secret || null;
+    }
+  } catch (err) {
+    // Repository hiccup must not wedge delivery; ship unsigned and let the
+    // delivery log show the outcome.
+    log.warn({ webhookId, error: err.message }, 'Could not resolve webhook record for signing');
+  }
+
+  log.info({ webhookId, url, signed: Boolean(secret) }, 'Delivering webhook');
 
   const startedAt = Date.now();
-  const result = await postJson(url, payload || {});
+  const result = await postJson(url, payload || {}, {
+    secret,
+    // Test-only transport injection (see postJson). Gated on isTest so a
+    // manipulated job payload can never swap the HTTP stack in production.
+    transport: require('../config').isTest ? data.transport : undefined,
+  });
   const durationMs = Date.now() - startedAt;
 
   // Record the delivery against the registered webhook when known.
@@ -182,3 +258,4 @@ async function webhookRetryHandler(data) {
 }
 
 module.exports = webhookRetryHandler;
+module.exports.signDelivery = signDelivery;

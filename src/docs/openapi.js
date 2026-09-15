@@ -42,6 +42,13 @@ function buildOpenApiSpec() {
             scheme: 'bearer',
             bearerFormat: 'JWT',
           },
+          apiKeyAuth: {
+            type: 'apiKey',
+            in: 'header',
+            name: 'x-api-key',
+            description:
+              'Machine-to-machine key issued via the API-key repository. Keys carry scopes (read/write); rate limiting resolves the tier from the key.',
+          },
         },
       },
       security: [{ bearerAuth: [] }],

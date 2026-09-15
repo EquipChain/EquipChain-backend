@@ -5,6 +5,7 @@ const { paginateCursor } = require('../utils/pagination');
 const { cacheService } = require('../services/cache');
 const { readingCount } = require('../services/aggregator');
 const { validate } = require('../middleware/validate');
+const { requireApiKey } = require('../middleware/apiKeyAuth');
 const {
   dailySummarySchema,
   monthlySummarySchema,
@@ -376,6 +377,8 @@ router.get('/fleet-summary', validate(fleetSummarySchema), async (req, res, next
  *       readings and drifts as rows are inserted mid-scan; cursor anchoring
  *       gives constant-time pages regardless of depth.
  *     tags: [Analytics]
+ *     security:
+ *       - apiKeyAuth: []
  *     parameters:
  *       - in: query
  *         name: meterId
@@ -391,8 +394,10 @@ router.get('/fleet-summary', validate(fleetSummarySchema), async (req, res, next
  *     responses:
  *       200: { description: One page of readings with pagination metadata }
  *       400: { description: Validation failed }
+ *       401: { description: Missing or invalid API key }
+ *       403: { description: API key lacks the read permission }
  */
-router.get('/readings', (req, res, next) => {
+router.get('/readings', requireApiKey({ permission: 'read' }), (req, res, next) => {
   try {
     const limitRaw = parseInt(req.query.limit, 10);
     const limit = Number.isFinite(limitRaw) ? Math.min(Math.max(limitRaw, 1), 100) : 50;

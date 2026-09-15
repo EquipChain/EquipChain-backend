@@ -116,17 +116,39 @@ All endpoints return JSON. Base URL: `http://localhost:3000` (development) or yo
 |--------|------|-------------|------|
 | `GET` | `/` | Project metadata (name, status, contract ID) | No |
 | `GET` | `/api/health` | Health check (uptime, status, timestamp) | No |
+| `GET` | `/health` | Service health + queue/scheduler stats + deploy identity (`gitSha`, `deployedAt`) | No |
+| `GET` | `/health/live` | Liveness probe — dependency-free; failure means restart | No |
+| `GET` | `/health/ready` | Readiness probe — checks services + cache; failure removes the instance from LB rotation | No |
+| `GET` | `/metrics` | Prometheus scrape (HTTP counters/histograms, event-loop lag, build info, queue/cache gauges) | Optional bearer (`METRICS_TOKEN`) |
+| `GET` | `/api/system/rate-limits` | Caller's resolved rate-limit tier, remaining budget, window reset | No |
+
+The Docker image carries a `HEALTHCHECK` probing `/health/live`; compose uses `/health/ready`.
 
 ### Auth
 
+Authentication is JWT-based (HS256, `Authorization: Bearer <token>`). Tokens carry a `sub` (identity), `roles` array, and a unique `jti` so they can be revoked server-side.
+
 | Method | Path | Description | Auth |
 |--------|------|-------------|------|
-| `POST` | `/api/auth/challenge` | Mock wallet-based auth challenge (returns JWT) | No |
-| `GET` | `/api/protected` | Protected route requiring Bearer token | Yes |
-| `POST` | `/auth/login` | Authenticate and receive a JWT | No |
-| `POST` | `/auth/register` | Create a new user account | No |
-| `POST` | `/auth/refresh` | Refresh an expired token | Yes |
-| `POST` | `/auth/logout` | Invalidate current session | Yes |
+| `POST` | `/api/auth/challenge` | Dev convenience: mint a JWT for a wallet address. Disabled in production unless `ENABLE_DEV_CHALLENGE=true` (the production flow is wallet-signature verification, layered onto this endpoint). Brute-force guarded (5/min per IP). | No |
+| `GET` | `/api/protected` | Protected sample route | Yes (JWT) |
+| `POST` | `/api/auth/logout` | Revoke the caller's own token server-side (jti denylist) | Yes (JWT) |
+| `GET` | `/api/analytics/readings` | Machine access to raw readings via API key | Yes (`x-api-key`) |
+
+> **Note:** The earlier revision of this table listed `/auth/login`,
+> `/auth/register`, and `/auth/refresh` — those endpoints never existed in
+> this service and the table has been corrected. There is currently no
+> password-based account system; identities come from the challenge flow
+> (dev) or wallet-signature verification (production), and user accounts
+> are managed by admins via `/api/admin/users`.
+
+#### API keys (machine-to-machine)
+
+Service clients authenticate with an `x-api-key` header instead of a JWT. Keys are stored in the API-key repository with a status, an expiry, a permission scope list (`read`, `write`), and a rate-limit tier (`standard`/`premium` → premium tier, `internal` → internal tier). Lookup is timing-safe (hash-then-compare), and a key lacking the route's required permission is rejected with 403 even though it authenticates.
+
+#### Token revocation
+
+Every token has a `jti`. `POST /api/auth/logout` (and `POST /api/admin/logout` for admins) denylists the presented token's `jti` for its remaining TTL through the shared cache, so sign-out is real: the token stops authenticating immediately, on every instance, not just the client that dropped it.
 
 ### Analytics
 
@@ -204,15 +226,42 @@ Same parameters as daily-summary, returns monthly rollups.
 }
 ```
 
-### Admin (Planned)
+### Admin
 
-| Method | Path | Description | Auth |
-|--------|------|-------------|------|
-| `GET` | `/admin/users` | List all users | Admin |
-| `GET` | `/admin/users/:id` | Get user details | Admin |
-| `PUT` | `/admin/users/:id` | Update user role/status | Admin |
-| `DELETE` | `/admin/users/:id` | Remove a user | Admin |
-| `GET` | `/admin/system` | System diagnostics | Admin |
+All admin routes require a JWT with the admin role. Changes to users, devices, config, and webhooks are recorded in an audit trail readable at `GET /api/admin/audit`.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/admin/users` | List users (paginated, filterable, searchable) |
+| `POST` | `/api/admin/users` | Create a user (duplicate email → 409) |
+| `GET` | `/api/admin/users/:id` | Get user details |
+| `PATCH` | `/api/admin/users/:id` | Update a user's roles |
+| `DELETE` | `/api/admin/users/:id` | Deactivate a user |
+| `GET` | `/api/admin/devices` | List registered devices |
+| `POST` | `/api/admin/devices` | Register a device (duplicate deviceId → 409) |
+| `PATCH` | `/api/admin/devices/:id` | Update device metadata |
+| `DELETE` | `/api/admin/devices/:id` | Remove a device |
+| `GET` | `/api/admin/webhooks` | List webhook endpoints (secrets omitted) |
+| `POST` | `/api/admin/webhooks` | Register a webhook (returns signing secret once) |
+| `GET` | `/api/admin/webhooks/:id` | Webhook details |
+| `GET` | `/api/admin/webhooks/:id/deliveries` | Recent delivery attempts (newest first) |
+| `PATCH` | `/api/admin/webhooks/:id` | Update webhook / pause via `status: inactive` |
+| `DELETE` | `/api/admin/webhooks/:id` | Delete webhook and its delivery logs |
+| `GET` | `/api/admin/config` | Get runtime config |
+| `PATCH` | `/api/admin/config` | Update whitelisted config keys (`rateLimitPerMinute`, `maintenanceMode`) |
+| `POST` | `/api/admin/config/reset` | Reset config to defaults |
+| `GET` | `/api/admin/audit` | Admin action audit trail (filter by `action`, `admin`) |
+| `GET` | `/api/admin/system/health` | System health snapshot |
+| `GET` | `/api/admin/system/stats` | Resource/connection stats |
+| `GET` | `/api/admin/system/ws-connections` | Active WebSocket connections |
+| `POST` | `/api/admin/logout` | Revoke the admin's own token |
+
+#### Runtime config keys
+
+| Key | Default | Effect |
+|-----|---------|--------|
+| `maintenanceMode` | `false` | `true` returns 503 on all `/api/exports` and `/api/analytics` routes (admin routes and health probes stay reachable so you can turn it back off) |
+| `rateLimitPerMinute` | `null` (off) | When set, caps **every** rate-limit tier at this many requests/min, live without restart |
 
 ### Meters (Planned)
 
@@ -225,14 +274,16 @@ Same parameters as daily-summary, returns monthly rollups.
 | `DELETE` | `/meters/:id` | Remove a meter | Admin |
 | `GET` | `/meters/:id/readings` | Get readings for a specific meter | Yes |
 
-### Exports (Planned)
+### Exports
+
+All export data comes from the live stores (readings store, device registry) — analytics summaries are computed from real stored readings.
 
 | Method | Path | Description | Auth |
 |--------|------|-------------|------|
 | `GET` | `/api/exports/readings` | Export meter readings (CSV/JSON/NDJSON) | Yes |
 | `GET` | `/api/exports/analytics/:summaryType` | Export analytics summaries (daily/weekly/monthly) | Yes |
-| `GET` | `/api/exports/system-report` | Export system-wide report (meters, readings, alerts) | Admin |
-| `GET` | `/api/exports/meters` | Export meter registry | Yes |
+| `GET` | `/api/exports/system-report` | Export system-wide report (meters, readings, alerts, summary) | Admin |
+| `GET` | `/api/exports/meters` | Export the device registry | Yes |
 
 #### Export Query Parameters
 
@@ -283,13 +334,33 @@ All export endpoints use streaming to handle large datasets efficiently:
 - Memory usage remains constant regardless of dataset size
 - Suitable for exporting 10,000+ records
 
-### Webhooks (Planned)
+### Webhooks
+
+Webhook endpoints are registered by admins and delivered through the job queue with SSRF guards (private/reserved targets refused), bounded redirects, retries with backoff, and HMAC-SHA256 signatures.
 
 | Method | Path | Description | Auth |
 |--------|------|-------------|------|
-| `POST` | `/webhooks` | Register a webhook endpoint | Admin |
-| `GET` | `/webhooks` | List registered webhooks | Yes |
-| `DELETE` | `/webhooks/:id` | Remove a webhook | Admin |
+| `POST` | `/api/admin/webhooks` | Register a webhook endpoint | Admin |
+| `GET` | `/api/admin/webhooks` | List registered webhooks | Admin |
+| `GET` | `/api/admin/webhooks/:id/deliveries` | Recent delivery attempts | Admin |
+| `PATCH` | `/api/admin/webhooks/:id` | Update or pause (`status: inactive`) | Admin |
+| `DELETE` | `/api/admin/webhooks/:id` | Remove a webhook | Admin |
+
+#### Verifying deliveries
+
+Every delivery to a registered webhook carries:
+
+```
+x-equipchain-signature: t=<unix_seconds>,v1=<hex_hmac>
+```
+
+The signature is HMAC-SHA256 over `"<t>.<raw_body>"` keyed with the secret returned at registration time. Because the timestamp is inside the signed material, a captured delivery cannot be replayed with a fresh timestamp — verify the HMAC **and** reject timestamps older than a few minutes:
+
+```js
+const expected = crypto.createHmac('sha256', SECRET).update(`${t}.${rawBody}`).digest('hex');
+const ok = crypto.timingSafeEqual(Buffer.from(sig, 'hex'), Buffer.from(expected, 'hex'))
+  && Math.abs(Date.now() / 1000 - t) < 300;
+```
 
 ### API Documentation (Implemented)
 
@@ -370,77 +441,110 @@ them. A cursor records the sort it was issued for, so replaying one against a di
 EquipChain-backend/
 ├── .github/
 │   └── workflows/
-│       └── ci.yml              # CI pipeline (test on push/PR to main)
+│       └── ci.yml              # CI (lint, Node 20/22 test matrix, audit, Docker gate)
+├── k6/                         # Grafana k6 load-test scenarios
 ├── scripts/
-│   └── seed-readings.js        # Sample meter readings generator (auto-runs in dev)
+│   ├── seed-readings.js        # Sample meter readings generator (auto-runs in dev)
+│   ├── docker-build.sh         # Docker build helper
+│   └── docker-run.sh           # Docker run helper
 ├── src/
 │   ├── config/
-│   │   ├── logger.js           # Pino structured logger
+│   │   ├── index.js            # Frozen env config, fail-fast validation
+│   │   ├── logger.js           # Pino structured logger with redaction
+│   │   ├── rateLimits.js       # Tier definitions for the rate limiter
 │   │   └── tracing.js          # OpenTelemetry setup
+│   ├── data/
+│   │   └── adminStore.js       # Admin-managed stores (users/devices/config/audit)
+│   ├── docs/
+│   │   └── openapi.js          # OpenAPI 3 spec builder from @openapi annotations
+│   ├── jobs/
+│   │   ├── billing.job.js      # Period consumption billing
+│   │   ├── cacheWarm.job.js    # Analytics cache warming
+│   │   ├── reports.job.js      # Daily/monthly report generation
+│   │   ├── sync.job.js         # Soroban contract-state sync
+│   │   └── webhookRetry.job.js # Signed webhook delivery (SSRF-guarded)
+│   ├── lib/
+│   │   └── soroban.js          # Soroban RPC adapter (real + mock backends)
+│   ├── middleware/
+│   │   ├── apiKeyAuth.js       # API-key auth (timing-safe, scopes, expiry)
+│   │   ├── auth.js             # JWT verify + jti revocation denylist
+│   │   ├── metrics.js          # Prometheus instrumentation + /metrics render
+│   │   ├── rateLimiter.js      # Tiered rate limiting with bounded store
+│   │   ├── requireAdmin.js     # Admin role guard
+│   │   └── validate.js         # Zod request validation
+│   ├── repositories/           # Repository layer (Base + domain repos)
 │   ├── routes/
-│   │   └── analytics.js        # Analytics aggregation endpoints
-│   ├── schemas/
-│   │   ├── analytics.schema.js # Analytics query validation schemas
-│   │   └── common.schema.js    # Shared Zod query schemas
+│   │   ├── admin/              # /api/admin/* (users, devices, webhooks, config, audit, system)
+│   │   ├── analytics.js        # /api/analytics/* aggregation + raw readings
+│   │   ├── docs.js             # /api/docs (Swagger UI), /api/openapi.json
+│   │   ├── exports.js          # /api/exports/* streaming exports
+│   │   └── index.js            # Router composition, health probes, logout
+│   ├── schemas/                # Zod request schemas
 │   ├── services/
-│   │   └── aggregator.js       # In-memory aggregation engine
-│   └── utils/
-│       ├── errors.js           # ValidationError (HTTP 400)
-│       └── pagination.js       # Offset + cursor pagination, filtering, sorting, search
-├── test/
-│   ├── aggregator.test.js      # Aggregation service unit tests
-│   ├── analytics.test.js       # Analytics endpoint integration tests
-│   ├── common.schema.test.js   # Query schema tests
-│   ├── cursorPagination.test.js # Cursor (keyset) pagination tests
-│   ├── logger.test.js          # Logger unit tests
-│   ├── pagination.test.js      # Pagination utility tests
-│   └── server.test.js          # Server integration tests
-├── index.js                    # Express app entry point
+│   │   ├── aggregator.js       # In-memory readings store + aggregation engine
+│   │   ├── cache.js            # Redis cache with bounded memory fallback
+│   │   ├── exporter.js         # Streaming CSV/JSON/NDJSON export engine
+│   │   ├── queue.js            # Durable job queue (timeouts, backpressure, recovery)
+│   │   ├── scheduler.js        # Cron-style scheduler (chunked intervals)
+│   │   ├── webhook.js          # Webhook delivery service
+│   │   └── websocket.js        # socket.io gateway (JWT handshakes)
+│   ├── utils/                  # pagination, sanitization, errors
+│   ├── app.js                  # Canonical Express app (middleware pipeline)
+│   └── server.js               # Server composition root (services, shutdown)
+├── test/                       # node:test suites (unit + integration)
+├── index.js                    # Boot entry point (npm start, Docker CMD)
+├── Dockerfile                  # Multi-stage build, non-root, HEALTHCHECK
+├── docker-compose.yml          # API + Redis stack
 ├── package.json                # Project metadata and dependencies
 └── README.md                   # You are here
 ```
 
-### Middleware Pipeline (Planned)
+### Middleware Pipeline
+
+The pipeline as actually mounted in `src/app.js`:
 
 ```
 Request
   │
   ▼
-[Logger]           → HTTP request logging (Pino + Correlation ID)
-[Rate Limiter]     → Rate limiting per IP/user
-[CORS]             → Cross-origin resource sharing
-[Auth]             → JWT verification for protected routes
-[Validator]        → Request body/param validation
+[Metrics]          → Request counter + duration histogram (bounded route labels)
+[/metrics]         → Prometheus scrape endpoint (optional bearer token)
+[Helmet]           → Security headers (strict CSP, HSTS, no framing)
+[CORS]             → Origin allowlist (CORS_ORIGINS)
+[Body parsing]     → JSON/urlencoded with size limit + prototype-pollution strip
+[Rate limiter]     → Tiered per identity (free/premium/admin/internal + API keys)
+[Auth guard]       → Stricter limiter on /api/auth/challenge (brute force)
+[Correlation ID]   → Sanitized x-correlation-id + structured request logging
   │
   ▼
-[Router]           → Dispatches to the appropriate controller
+[Router]           → System routes, analytics, exports, docs, admin (JWT + role)
+[Maintenance gate] → 503 kill-switch on public analytics/exports when enabled
   │
   ▼
-[Controller]       → Handles business logic orchestration
-[Service Layer]    → Encapsulates domain logic
-[Repository]       → Data access (Redis / Soroban / DB)
+[Handlers]         → Route handlers → services → repositories
   │
   ▼
-[Response]         → JSON serialization and response
+[404] → [Error handler] → Standard error envelope, correlation-ID reference for 500s
 ```
 
-### Service Layer
+### Services
 
-Services encapsulate business logic and are injected into controllers:
-
-- **MeterService** — CRUD operations for meters, reading aggregation
-- **AuthService** — User authentication, JWT management, session handling
-- **AnalyticsService** — Trend computation, anomaly detection, alert generation
-- **ExportService** — Data formatting and file generation (CSV/JSON)
+- **Cache** — Redis with a bounded in-memory fallback; single-flight `getOrSet` prevents stampedes
+- **Queue** — Durable job queue: per-job timeouts, backpressure cap, crash recovery, retry ladder
+- **Scheduler** — Cron-style recurring jobs (billing, reports, sync, cache warm)
+- **Webhook** — Signed HTTP delivery through the queue
+- **WebSocket** — socket.io gateway broadcasting meter readings (batched per meter)
 
 ### Data Access (Repository Pattern)
 
 | Repository | Backend | Purpose |
 |------------|---------|---------|
-| `MeterRepository` | Soroban / Redis | On-chain meter state and cached readings |
-| `UserRepository` | PostgreSQL / in-memory | User accounts and roles |
-| `AnalyticsRepository` | Redis | Cached aggregations and computed metrics |
-| `WebhookRepository` | Redis | Webhook endpoint storage and event dispatch |
+| `MeterReadingRepository` | In-memory / future DB | Meter readings |
+| `UserRepository` | In-memory / future PostgreSQL | User accounts and roles |
+| `DeviceRepository` | In-memory / future DB | Device registry |
+| `ApiKeyRepository` | In-memory / future DB | API keys (scopes, expiry, tiers) |
+| `WebhookRepository` | In-memory / future DB | Webhook endpoints + capped delivery logs |
+| `ConfigRepository` | In-memory / future DB | Runtime config |
 
 ---
 

@@ -1,6 +1,6 @@
 // src/routes/admin/devices.js
 const express = require('express');
-const { deviceStore } = require('../../data/adminStore');
+const { deviceStore, recordAdminAudit, ADMIN_AUDIT_ACTIONS } = require('../../data/adminStore');
 const { validate } = require('../../middleware/validate');
 const {
   adminRegisterDeviceSchema,
@@ -55,7 +55,14 @@ router.post('/', validate(adminRegisterDeviceSchema), (req, res) => {
       message: `A device with deviceId "${req.body.deviceId}" is already registered.`,
     });
   }
-  res.status(201).json(deviceStore.create(req.body));
+  const created = deviceStore.create(req.body);
+  recordAdminAudit({
+    action: ADMIN_AUDIT_ACTIONS.DEVICE_CREATE,
+    admin: req.user?.sub || 'unknown',
+    target: created.id,
+    changes: { deviceId: created.deviceId, name: created.name },
+  });
+  res.status(201).json(created);
 });
 
 /**
@@ -96,6 +103,12 @@ router.get('/', (req, res, next) => {
 router.patch('/:id', validate({ ...adminUpdateDeviceSchema, params: adminIdParamSchema.params }), (req, res) => {
   const device = deviceStore.update(req.params.id, req.body);
   if (!device) return res.status(404).json({ error: 'Device not found' });
+  recordAdminAudit({
+    action: ADMIN_AUDIT_ACTIONS.DEVICE_UPDATE,
+    admin: req.user?.sub || 'unknown',
+    target: device.id,
+    changes: req.body,
+  });
   res.json(device);
 });
 
@@ -118,6 +131,11 @@ router.patch('/:id', validate({ ...adminUpdateDeviceSchema, params: adminIdParam
 router.delete('/:id', validate(adminIdParamSchema), (req, res) => {
   const removed = deviceStore.remove(req.params.id);
   if (!removed) return res.status(404).json({ error: 'Device not found' });
+  recordAdminAudit({
+    action: ADMIN_AUDIT_ACTIONS.DEVICE_DELETE,
+    admin: req.user?.sub || 'unknown',
+    target: req.params.id,
+  });
   res.json({ success: true });
 });
 

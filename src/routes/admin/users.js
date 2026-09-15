@@ -1,6 +1,6 @@
 // src/routes/admin/users.js
 const express = require('express');
-const { userStore } = require('../../data/adminStore');
+const { userStore, recordAdminAudit, ADMIN_AUDIT_ACTIONS } = require('../../data/adminStore');
 const { validate } = require('../../middleware/validate');
 const {
   adminCreateUserSchema,
@@ -98,7 +98,29 @@ router.get('/:id', validate(adminIdParamSchema), (req, res) => {
  *       400: { description: Validation failed }
  */
 router.post('/', validate(adminCreateUserSchema), (req, res) => {
-  res.status(201).json(userStore.create(req.body));
+  // Email is the user's lookup identity; duplicates would make role
+  // administration ambiguous (two accounts, one address). 409 conflict -
+  // well-formed request, collides with existing state. Comparison is
+  // case-insensitive because local-part case is visually indistinguishable
+  // for users and mail systems treat the domain as insensitive.
+  const email = req.body.email.toLowerCase();
+  const existing = userStore
+    .list()
+    .find((u) => (u.email || '').toLowerCase() === email);
+  if (existing) {
+    return res.status(409).json({
+      error: 'User already exists',
+      message: `A user with email "${req.body.email}" already exists.`,
+    });
+  }
+  const created = userStore.create(req.body);
+  recordAdminAudit({
+    action: ADMIN_AUDIT_ACTIONS.USER_CREATE,
+    admin: req.user?.sub || 'unknown',
+    target: created.id,
+    changes: { email: created.email, roles: created.roles },
+  });
+  res.status(201).json(created);
 });
 
 /**
@@ -121,6 +143,14 @@ router.post('/', validate(adminCreateUserSchema), (req, res) => {
 router.patch('/:id', validate({ ...adminUpdateUserRolesSchema, params: adminIdParamSchema.params }), (req, res) => {
   const user = userStore.updateRoles(req.params.id, req.body.roles);
   if (!user) return res.status(404).json({ error: 'User not found' });
+  // Role changes are the highest-value admin action on this surface - they
+  // grant or revoke admin itself - so they are audited with the actor.
+  recordAdminAudit({
+    action: ADMIN_AUDIT_ACTIONS.USER_ROLES_UPDATE,
+    admin: req.user?.sub || 'unknown',
+    target: user.id,
+    changes: { roles: user.roles },
+  });
   res.json(user);
 });
 
@@ -143,6 +173,12 @@ router.patch('/:id', validate({ ...adminUpdateUserRolesSchema, params: adminIdPa
 router.delete('/:id', validate(adminIdParamSchema), (req, res) => {
   const user = userStore.deactivate(req.params.id);
   if (!user) return res.status(404).json({ error: 'User not found' });
+  recordAdminAudit({
+    action: ADMIN_AUDIT_ACTIONS.USER_DEACTIVATE,
+    admin: req.user?.sub || 'unknown',
+    target: user.id,
+    changes: { active: false },
+  });
   res.json(user);
 });
 

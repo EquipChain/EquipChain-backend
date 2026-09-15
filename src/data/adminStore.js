@@ -109,11 +109,26 @@ const configStore = {
     }
     config = { ...config, ...applied };
     _appendAudit({ admin: adminId, changes: applied, ...(ignored.length > 0 ? { ignored } : {}) });
+    // Mirror into the shared admin trail so one ordered log covers every
+    // privileged mutation surface.
+    recordAdminAudit({
+      action: ADMIN_AUDIT_ACTIONS.CONFIG_UPDATE,
+      admin: adminId || 'unknown',
+      target: 'config',
+      changes: applied,
+      ...(ignored.length > 0 ? { ignored } : {}),
+    });
     return config;
   },
   reset: (adminId) => {
     config = { ...defaultConfig };
     _appendAudit({ admin: adminId, changes: 'reset-to-defaults' });
+    recordAdminAudit({
+      action: ADMIN_AUDIT_ACTIONS.CONFIG_RESET,
+      admin: adminId || 'unknown',
+      target: 'config',
+      changes: 'reset-to-defaults',
+    });
     return config;
   },
   auditLog: () => configAuditLog,
@@ -122,6 +137,51 @@ const configStore = {
     configAuditLog = [];
   },
 };
+
+/**
+ * Shared admin action audit trail. Config changes had one; user and device
+ * mutations - the actions that actually change who can access what (role
+ * grants, deactivations, device registration/removal) - happened with no
+ * record beyond HTTP logs. Security review for a compromised admin account
+ * needs a single ordered trail of every privileged mutation.
+ *
+ * Entries: { action, admin, target, changes?, ignored?, timestamp }
+ * Capped at MAX_AUDIT_ENTRIES like the config log (most recent kept).
+ */
+const adminAuditLog = [];
+
+const ADMIN_AUDIT_ACTIONS = Object.freeze({
+  USER_CREATE: 'user.create',
+  USER_ROLES_UPDATE: 'user.roles.update',
+  USER_DEACTIVATE: 'user.deactivate',
+  DEVICE_CREATE: 'device.create',
+  DEVICE_UPDATE: 'device.update',
+  DEVICE_DELETE: 'device.delete',
+  CONFIG_UPDATE: 'config.update',
+  CONFIG_RESET: 'config.reset',
+  WEBHOOK_CREATE: 'webhook.create',
+  WEBHOOK_UPDATE: 'webhook.update',
+  WEBHOOK_DELETE: 'webhook.delete',
+});
+
+/**
+ * Record one admin action. Never throws into the caller: audit failures
+ * must not break the mutation being audited (or, worse, roll it back).
+ * @param {{ action: string, admin: string, target: string, changes?: Object|string, ignored?: string[] }} entry
+ */
+function recordAdminAudit(entry) {
+  try {
+    adminAuditLog.push({
+      ...entry,
+      timestamp: new Date().toISOString(),
+    });
+    if (adminAuditLog.length > MAX_AUDIT_ENTRIES) {
+      adminAuditLog.splice(0, adminAuditLog.length - MAX_AUDIT_ENTRIES);
+    }
+  } catch {
+    // Swallow: an audit sink must never take down the request path.
+  }
+}
 
 /**
  * Append an audit entry, dropping the oldest when over the cap.
@@ -134,4 +194,14 @@ function _appendAudit(entry) {
   }
 }
 
-module.exports = { userStore, deviceStore, configStore };
+module.exports = {
+  userStore,
+  deviceStore,
+  configStore,
+  recordAdminAudit,
+  adminAuditLog: () => adminAuditLog,
+  ADMIN_AUDIT_ACTIONS,
+  _resetAdminAudit: () => {
+    adminAuditLog.length = 0;
+  },
+};

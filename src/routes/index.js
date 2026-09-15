@@ -108,6 +108,51 @@ router.get('/api/system/rate-limits', (req, res) => {
 // Admin API - JWT + admin role required for every sub-route
 router.use('/api/admin', authenticate, requireAdmin, adminRouter);
 
+/**
+ * POST /api/auth/logout
+ *
+ * Server-side sign-out for every authenticated caller, not just admins.
+ * Revokes the caller's own token (jti) for its remaining TTL: the token
+ * stops working the moment this responds, rather than remaining valid
+ * until natural expiry. Admins have had this since the admin logout landed;
+ * regular users' "logout" only deleted the client-side token, which is
+ * not sign-out - a copied token kept authenticating until expiry.
+ *
+ * Mounted with authenticate only (no role check): any authenticated
+ * identity may revoke itself.
+ *
+ * @openapi
+ * /api/auth/logout:
+ *   post:
+ *     summary: Revoke the caller's own token
+ *     description: |
+ *       Server-side sign-out: the presented JWT's id (jti) is denylisted for
+ *       the token's remaining lifetime, so the token stops authenticating
+ *       immediately. Requires a valid bearer token.
+ *     tags: [Auth]
+ *     security: [{ bearerAuth: [] }]
+ *     responses:
+ *       200: { description: Token revoked }
+ *       401: { description: Missing or invalid bearer token }
+ */
+router.post('/api/auth/logout', authenticate, async (req, res, next) => {
+  try {
+    if (req.user && req.user.jti) {
+      const { revokeToken } = require('../middleware/auth');
+      await revokeToken(req.user.jti, req.user.exp);
+      return res.json({ success: true, message: 'Token revoked.' });
+    }
+    // Authenticated but jti-less (e.g. a legacy token): nothing revocable,
+    // and the client should drop the token regardless.
+    return res.json({
+      success: false,
+      message: 'Token has no revocable id (jti); discard it client-side.',
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Health check route
 /**
  * @openapi

@@ -49,6 +49,9 @@ module.exports = [
     },
     rules: {
       ...require('@eslint/js').configs.recommended.rules,
+      // Redaction-by-rest-sibling is idiomatic here (const { secret, ...safe } = row);
+      // the omitted key is the point, so don't flag it as unused.
+      'no-unused-vars': ['error', { ignoreRestSiblings: true }],
       // Security rules (severities preserved from .eslintrc.json)
       'security/detect-object-injection': 'warn',
       'security/detect-non-literal-fs-filename': 'warn',

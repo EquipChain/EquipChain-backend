@@ -165,6 +165,35 @@ const adminIdParamSchema = {
   }),
 };
 
+/**
+ * Webhook registration schema. The URL must be http(s) - the delivery job
+ * rejects other protocols anyway, so rejecting here gives admins a precise
+ * 400 instead of a job that fails asynchronously on first delivery.
+ */
+const adminRegisterWebhookSchema = {
+  body: z.object({
+    url: z
+      .string()
+      .url('Invalid webhook URL')
+      .regex(/^https?:\/\//, 'Webhook URL must use http or https'),
+    event: z.string().min(1, 'Event is required').max(64, 'Event name too long'),
+    description: z.string().max(256).optional(),
+    secret: z.string().min(16, 'Secret must be at least 16 characters').max(128).optional(),
+  }),
+};
+
+const adminUpdateWebhookSchema = {
+  body: z
+    .object({
+      event: z.string().min(1).max(64).optional(),
+      description: z.string().max(256).optional(),
+      status: z.enum(['active', 'inactive']).optional(),
+    })
+    .refine((v) => Object.keys(v).length > 0, {
+      message: 'At least one field must be provided',
+    }),
+};
+
 module.exports = {
   idParamSchema,
   authChallengeSchema,
@@ -183,4 +212,6 @@ module.exports = {
   adminRegisterDeviceSchema,
   adminUpdateDeviceSchema,
   adminIdParamSchema,
+  adminRegisterWebhookSchema,
+  adminUpdateWebhookSchema,
 };

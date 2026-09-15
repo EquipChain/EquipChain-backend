@@ -3,6 +3,7 @@ const express = require('express');
 const usersRouter = require('./users');
 const configRouter = require('./config');
 const devicesRouter = require('./devices');
+const webhooksRouter = require('./webhooks');
 const systemRouter = require('./system');
 const { revokeToken } = require('../../middleware/auth');
 
@@ -10,6 +11,7 @@ const router = express.Router();
 router.use('/users', usersRouter);
 router.use('/config', configRouter);
 router.use('/devices', devicesRouter);
+router.use('/webhooks', webhooksRouter);
 router.use('/system', systemRouter);
 
 /**

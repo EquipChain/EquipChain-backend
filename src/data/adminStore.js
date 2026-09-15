@@ -13,7 +13,11 @@ let nextUserId = 1;
 let devices = [];
 let nextDeviceId = 1;
 
-const defaultConfig = { rateLimitPerMinute: 60, maintenanceMode: false };
+// rateLimitPerMinute defaults to null = no global ceiling: tiers run at
+// their own configured max. An admin sets it (PATCH /api/admin/config) to
+// cap ALL tiers - the point of an incident knob is to be off by default,
+// not to silently throttle every tier to 60/min from boot.
+const defaultConfig = { rateLimitPerMinute: null, maintenanceMode: false };
 let config = { ...defaultConfig };
 let configAuditLog = [];
 

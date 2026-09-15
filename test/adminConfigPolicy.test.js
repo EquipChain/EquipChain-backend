@@ -35,10 +35,10 @@ describe('configStore key whitelist', () => {
     assert.deepStrictEqual(last.changes, { maintenanceMode: true });
   });
 
-  it('reset restores defaults and records the reset', () => {
+  it('reset restores defaults (ceiling cleared) and records the reset', () => {
     configStore.update({ rateLimitPerMinute: 5 }, 'admin-1');
     configStore.reset('admin-1');
-    assert.strictEqual(configStore.get().rateLimitPerMinute, 60);
+    assert.strictEqual(configStore.get().rateLimitPerMinute, null);
     assert.strictEqual(configStore.auditLog().at(-1).changes, 'reset-to-defaults');
   });
 });
@@ -49,12 +49,14 @@ describe('rateLimitPerMinute runtime ceiling', () => {
     _resetStore();
   });
 
-  function makeApp() {
+  function makeApp(tier = 'free') {
     const app = express();
-    app.use(createRateLimiter({ tierOverride: 'free' }));
+    app.use(createRateLimiter({ tierOverride: tier }));
     app.get('/', (req, res) => res.json({ ok: true }));
     return app;
   }
+
+  const makeAppTier = makeApp;
 
   it('tightens every tier when lowered below the tier max (live, no restart)', async () => {
     configStore.update({ rateLimitPerMinute: 3 }, 'admin-1');
@@ -75,7 +77,21 @@ describe('rateLimitPerMinute runtime ceiling', () => {
     }
   });
 
-  it('raises a tier only up to the ceiling (never above tier max semantics)', async () => {
+  it('null ceiling leaves every tier at its own configured max', async () => {
+    // Default config: rateLimitPerMinute is null, premium tier runs at 600.
+    const app = makeAppTier('premium');
+    const server = app.listen(0);
+
+    try {
+      const res = await fetch(`http://localhost:${server.address().port}/`);
+      assert.strictEqual(res.status, 200);
+      assert.strictEqual(Number(res.headers.get('x-ratelimit-limit')), 600);
+    } finally {
+      server.close();
+    }
+  });
+
+  it('raising the ceiling above a tier max leaves that tier unchanged', async () => {
     // Ceiling above free tier's 60: free tier stays at 60.
     configStore.update({ rateLimitPerMinute: 500 }, 'admin-1');
     const app = makeApp();

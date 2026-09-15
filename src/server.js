@@ -199,5 +199,3 @@ if (require.main === module) {
 }
 
 module.exports = { startServer, gracefulShutdown, installProcessHandlers };
-
-module.exports = { startServer, gracefulShutdown };

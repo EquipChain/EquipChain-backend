@@ -32,3 +32,18 @@ it('GET /non-existent returns 404 with JSON', async () => {
   const data = await res.json();
   assert.strictEqual(data.error, 'Not Found');
 });
+
+// Boot contract: index.js (the Docker CMD and `npm start`) destructures
+// startServer, installProcessHandlers, and gracefulShutdown from this module.
+// A duplicate module.exports later in the file silently overwrote the first
+// and dropped installProcessHandlers, so every production container crashed
+// at boot with "installProcessHandlers is not a function" while tests - which
+// spawn src/server.js directly - stayed green. Asserting the export surface
+// here pins the contract regardless of how many module.exports statements
+// exist in the file (the last one wins).
+it('src/server exports the full boot contract used by index.js', () => {
+  const serverModule = require('../src/server');
+  assert.strictEqual(typeof serverModule.startServer, 'function');
+  assert.strictEqual(typeof serverModule.installProcessHandlers, 'function');
+  assert.strictEqual(typeof serverModule.gracefulShutdown, 'function');
+});

@@ -24,7 +24,27 @@ describe('Export Endpoints Integration Tests', () => {
 
     const app = require('../src/app');
     server = app.listen(PORT);
-    
+
+    // Seed the REAL stores the exports now read from. Exports previously
+    // served hardcoded mock arrays; they now read the aggregator's readings
+    // store and the admin device registry, so the tests seed those stores
+    // directly and assert against seeded values.
+    const aggregator = require('../src/services/aggregator');
+    const { deviceStore } = require('../src/data/adminStore');
+    aggregator.clearReadings();
+    deviceStore._reset();
+
+    aggregator.addReadings([
+      { meterId: 'meter-001', timestamp: '2026-01-15T08:00:00Z', value: 100, unit: 'kWh' },
+      { meterId: 'meter-001', timestamp: '2026-01-15T09:00:00Z', value: 150, unit: 'kWh' },
+      { meterId: 'meter-001', timestamp: '2026-01-16T08:00:00Z', value: 200, unit: 'kWh' },
+      { meterId: 'meter-002', timestamp: '2026-01-15T08:00:00Z', value: 50, unit: 'kWh' },
+      { meterId: 'meter-002', timestamp: '2026-01-16T09:00:00Z', value: 75, unit: 'kWh' },
+    ]);
+
+    deviceStore.create({ deviceId: 'meter-001', name: 'Main Building Meter', location: 'Building A' });
+    deviceStore.create({ deviceId: 'meter-002', name: 'Auxiliary Meter', location: 'Building B' });
+
     // Wait for server to be ready
     await new Promise(resolve => setTimeout(resolve, 100));
   });
@@ -33,6 +53,9 @@ describe('Export Endpoints Integration Tests', () => {
     if (server) {
       server.close();
     }
+    // Stores are module-global; reset so other test files are unaffected.
+    require('../src/services/aggregator').clearReadings();
+    require('../src/data/adminStore').deviceStore._reset();
   });
 
   function makeRequest(path, options = {}) {
@@ -84,7 +107,11 @@ describe('Export Endpoints Integration Tests', () => {
       assert.strictEqual(response.headers['content-type'], 'text/csv; charset=utf-8');
       assert.ok(response.headers['content-disposition'].includes('attachment'));
       assert.ok(response.headers['content-disposition'].includes('meter-readings'));
-      assert.ok(response.body.includes('id,meterId,timestamp,value,unit,status'));
+      // Real reading shape: no fabricated 'status' column.
+      assert.ok(response.body.includes('id,meterId,timestamp,value,unit,createdAt'));
+      // Seeded rows are present in the export.
+      assert.ok(response.body.includes('meter-001'));
+      assert.ok(response.body.includes('100'));
     });
 
     test('should return JSON when format=json', async () => {
@@ -143,6 +170,7 @@ describe('Export Endpoints Integration Tests', () => {
       
       assert.strictEqual(response.statusCode, 200);
       const data = JSON.parse(response.body);
+      assert.ok(data.length > 0, 'seeded meter-001 rows must be exported');
       data.forEach(reading => {
         assert.strictEqual(reading.meterId, 'meter-001');
       });
@@ -155,6 +183,7 @@ describe('Export Endpoints Integration Tests', () => {
       
       assert.strictEqual(response.statusCode, 200);
       const data = JSON.parse(response.body);
+      assert.ok(data.length > 0, 'seeded 2026-01-15 rows must be exported');
       data.forEach(reading => {
         const date = reading.timestamp.split('T')[0];
         assert.strictEqual(date, '2026-01-15');
@@ -193,6 +222,8 @@ describe('Export Endpoints Integration Tests', () => {
       assert.strictEqual(response.statusCode, 200);
       assert.ok(response.body.includes('date'));
       assert.ok(response.body.includes('totalConsumption'));
+      // Computed from seeded readings: 2026-01-15 has 100+150+50 = 300.
+      assert.ok(response.body.includes('2026-01-15'));
     });
 
     test('should return weekly analytics', async () => {
@@ -203,6 +234,8 @@ describe('Export Endpoints Integration Tests', () => {
       assert.strictEqual(response.statusCode, 200);
       const data = JSON.parse(response.body);
       assert.ok(Array.isArray(data));
+      assert.ok(data.length > 0, 'seeded readings must produce one weekly bucket');
+      assert.strictEqual(data[0].weekStart, '2026-01-12'); // Monday of the seed week (Jan 15 2026 is a Thursday)
     });
 
     test('should return monthly analytics', async () => {
@@ -213,6 +246,8 @@ describe('Export Endpoints Integration Tests', () => {
       assert.strictEqual(response.statusCode, 200);
       const data = JSON.parse(response.body);
       assert.ok(Array.isArray(data));
+      assert.ok(data.length > 0);
+      assert.strictEqual(data[0].month, '2026-01');
     });
 
     test('should return 400 for invalid summary type', async () => {
@@ -239,10 +274,16 @@ describe('Export Endpoints Integration Tests', () => {
       
       assert.strictEqual(response.statusCode, 200);
       const data = JSON.parse(response.body);
+      assert.ok(data.length > 0);
       data.forEach(item => {
         assert.ok(item.date >= '2026-01-15');
         assert.ok(item.date <= '2026-01-16');
       });
+      // 2026-01-15: 100+150+50 = 300; 2026-01-16: 200+75 = 275.
+      const d15 = data.find((d) => d.date === '2026-01-15');
+      const d16 = data.find((d) => d.date === '2026-01-16');
+      assert.strictEqual(d15.totalConsumption, 300);
+      assert.strictEqual(d16.totalConsumption, 275);
     });
   });
 
@@ -273,6 +314,12 @@ describe('Export Endpoints Integration Tests', () => {
       assert.ok(data.readings);
       assert.ok(data.alerts);
       assert.ok(data.summary);
+      // Real data: 2 registered devices, 5 seeded readings, honest empty alerts.
+      assert.strictEqual(data.meters.length, 2);
+      assert.strictEqual(data.readings.length, 5);
+      assert.deepStrictEqual(data.alerts, []);
+      assert.strictEqual(data.summary.totalMeters, 2);
+      assert.strictEqual(data.summary.totalReadings, 5);
     });
 
     test('should filter sections', async () => {
@@ -315,19 +362,21 @@ describe('Export Endpoints Integration Tests', () => {
       });
       
       assert.strictEqual(response.statusCode, 200);
-      assert.ok(response.body.includes('id,name,location,status'));
+      // Real device registry shape.
+      assert.ok(response.body.includes('id,deviceId,name,location,registeredAt'));
+      assert.ok(response.body.includes('Main Building Meter'));
     });
 
-    test('should filter by status', async () => {
+    test('should filter by status (registry has no status; matches nothing)', async () => {
+      // The real device registry tracks no 'status' field - the filter stays
+      // for contract stability and honestly selects nothing.
       const response = await makeRequest('/api/exports/meters?format=json&status=online', {
         headers: { Authorization: `Bearer ${global.userToken}` },
       });
       
       assert.strictEqual(response.statusCode, 200);
       const data = JSON.parse(response.body);
-      data.forEach(meter => {
-        assert.strictEqual(meter.status, 'online');
-      });
+      assert.deepStrictEqual(data, []);
     });
 
     test('should filter by location', async () => {

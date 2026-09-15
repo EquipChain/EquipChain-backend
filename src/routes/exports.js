@@ -6,6 +6,13 @@ const { validate } = require('../middleware/validate');
 const { authenticate } = require('../middleware/auth');
 const { requireAdmin } = require('../middleware/requireAdmin');
 const {
+  getReadings,
+  getBucketKey,
+  aggregateValues,
+  readingCount,
+} = require('../services/aggregator');
+const { deviceStore } = require('../data/adminStore');
+const {
   exportReadingsQuerySchema,
   exportAnalyticsParamsSchema,
   exportAnalyticsQuerySchema,
@@ -15,135 +22,178 @@ const {
 
 const log = childLogger('routes:exports');
 
-/**
- * Mock data for meter readings
- * In production, this would come from a repository/service layer
- */
-const mockMeterReadings = [
-  {
-    id: 'reading-001',
-    meterId: 'meter-001',
-    timestamp: '2026-01-15T08:00:00Z',
-    value: 1234.56,
-    unit: 'kWh',
-    status: 'verified',
-  },
-  {
-    id: 'reading-002',
-    meterId: 'meter-001',
-    timestamp: '2026-01-15T09:00:00Z',
-    value: 1245.78,
-    unit: 'kWh',
-    status: 'verified',
-  },
-  {
-    id: 'reading-003',
-    meterId: 'meter-002',
-    timestamp: '2026-01-15T08:00:00Z',
-    value: 987.65,
-    unit: 'kWh',
-    status: 'pending',
-  },
-];
+// ─── Real data sources ───────────────────────────────────────────────────────
+//
+// Exports previously served hardcoded mock arrays: every "meter reading" a
+// customer exported was one of three fabricated rows, the analytics summaries
+// were constants, and the system report described meters that never existed.
+// The real stores existed the whole time (the aggregator's readings store and
+// the admin device registry) - exports just were not wired to them.
+//
+// There is deliberately no alert section data: the platform has no alert
+// subsystem yet, so the report ships an honest empty array rather than a
+// fabricated example alert.
 
 /**
- * Mock data for analytics summaries
+ * Export shape of a reading: timestamps serialize as ISO-8601 strings (the
+ * store keeps epoch millis for arithmetic; exports are for humans and other
+ * systems, both of which want ISO).
  */
-const mockAnalyticsData = {
-  daily: [
-    {
-      date: '2026-01-15',
-      totalConsumption: 3456.78,
-      averageConsumption: 1152.26,
-      peakConsumption: 1245.78,
-      meterCount: 3,
+function toExportReading(r) {
+  return {
+    id: r.id,
+    meterId: r.meterId,
+    timestamp: new Date(r.timestamp).toISOString(),
+    value: r.value,
+    unit: r.unit,
+    createdAt: r.createdAt,
+  };
+}
+
+/**
+ * Real readings from the aggregator store, filtered by meter, date range,
+ * and status. Status never matches real readings (they carry no status
+ * field) - the filter is kept so the query contract stays stable and
+ * simply selects nothing until readings gain a status concept.
+ */
+function getExportReadings({ meterIds, status, startDate, endDate } = {}) {
+  const filters = {};
+  if (meterIds && meterIds.length > 0) filters.meterIds = meterIds;
+  if (startDate) filters.startDate = startDate;
+  if (endDate) filters.endDate = endDate;
+
+  let rows = getReadings(filters).map(toExportReading);
+  if (status) {
+    rows = rows.filter((r) => r.status === status);
+  }
+  return rows;
+}
+
+/**
+ * Meter registry export from the admin device registry - the closest real
+ * analogue to "the fleet". Registered devices are emitted honestly: fields
+ * the registry does not track (status, last reading) are absent rather than
+ * fabricated.
+ */
+function getExportMeters({ status, location } = {}) {
+  let rows = deviceStore.list().map((d) => ({
+    id: d.id,
+    deviceId: d.deviceId,
+    name: d.name,
+    location: d.location || null,
+    registeredAt: d.registeredAt || d.createdAt,
+  }));
+  if (status) {
+    rows = rows.filter((m) => m.status === status);
+  }
+  if (location) {
+    rows = rows.filter((m) => m.location === location);
+  }
+  return rows;
+}
+
+/**
+ * Group readings by a bucket granularity and reduce each group to summary
+ * statistics. Shared by the daily/weekly/monthly analytics exports.
+ */
+function bucketSummaries(granularity) {
+  const groups = new Map();
+  for (const r of getReadings()) {
+    const key = getBucketKey(r.timestamp, granularity);
+    if (!groups.has(key)) {
+      groups.set(key, { values: [], meters: new Set(), dayTotals: new Map() });
+    }
+    const g = groups.get(key);
+    g.values.push(r.value);
+    g.meters.add(r.meterId);
+    if (granularity !== 'day') {
+      const dayKey = getBucketKey(r.timestamp, 'day');
+      g.dayTotals.set(dayKey, (g.dayTotals.get(dayKey) || 0) + r.value);
+    }
+  }
+  return [...groups.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([key, g]) => ({ key, ...g }));
+}
+
+/** Daily summaries: one row per day with data. */
+function computeDailySummaries(startDate, endDate) {
+  let rows = bucketSummaries('day').map(({ key, values, meters }) => ({
+    date: key,
+    totalConsumption: aggregateValues(values, 'sum'),
+    averageConsumption: aggregateValues(values, 'avg'),
+    peakConsumption: aggregateValues(values, 'max'),
+    meterCount: meters.size,
+  }));
+  if (startDate) rows = rows.filter((r) => r.date >= String(startDate).slice(0, 10));
+  if (endDate) rows = rows.filter((r) => r.date <= String(endDate).slice(0, 10));
+  return rows;
+}
+
+/** Weekly summaries with peak day and per-day average inside each week. */
+function computeWeeklySummaries() {
+  return bucketSummaries('week').map(({ key, values, meters, dayTotals }) => {
+    const weekEnd = new Date(`${key}T00:00:00Z`);
+    weekEnd.setUTCDate(weekEnd.getUTCDate() + 6);
+    const peakDay = [...dayTotals.entries()].sort((a, b) => b[1] - a[1])[0];
+    const total = aggregateValues(values, 'sum');
+    return {
+      weekStart: key,
+      weekEnd: weekEnd.toISOString().slice(0, 10),
+      totalConsumption: total,
+      averageDailyConsumption: dayTotals.size > 0 ? Math.round((total / dayTotals.size) * 100) / 100 : total,
+      peakDay: peakDay ? peakDay[0] : null,
+      meterCount: meters.size,
+    };
+  });
+}
+
+/** Monthly summaries with peak day and per-day average inside each month. */
+function computeMonthlySummaries() {
+  return bucketSummaries('month').map(({ key, values, meters, dayTotals }) => {
+    const [year, month] = key.split('-').map(Number);
+    const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+    const peakDay = [...dayTotals.entries()].sort((a, b) => b[1] - a[1])[0];
+    const total = aggregateValues(values, 'sum');
+    return {
+      month: key,
+      totalConsumption: total,
+      averageDailyConsumption: Math.round((total / daysInMonth) * 100) / 100,
+      peakDay: peakDay ? peakDay[0] : null,
+      meterCount: meters.size,
+    };
+  });
+}
+
+/** Build the system report from the real stores. */
+function buildSystemReport(sections) {
+  const report = {};
+  if (sections.includes('meters')) report.meters = getExportMeters();
+  if (sections.includes('readings')) report.readings = getExportReadings();
+  if (sections.includes('alerts')) report.alerts = [];
+  if (sections.includes('summary')) {
+    report.summary = {
+      totalMeters: deviceStore.list().length,
+      totalReadings: readingCount(),
       activeAlerts: 0,
-    },
-    {
-      date: '2026-01-16',
-      totalConsumption: 3678.90,
-      averageConsumption: 1226.30,
-      peakConsumption: 1345.67,
-      meterCount: 3,
-      activeAlerts: 1,
-    },
-  ],
-  weekly: [
-    {
-      weekStart: '2026-01-13',
-      weekEnd: '2026-01-19',
-      totalConsumption: 24567.89,
-      averageDailyConsumption: 3509.70,
-      peakDay: '2026-01-16',
-      meterCount: 3,
-      activeAlerts: 3,
-    },
-  ],
-  monthly: [
-    {
-      month: '2026-01',
-      totalConsumption: 98765.43,
-      averageDailyConsumption: 3185.98,
-      peakDay: '2026-01-25',
-      meterCount: 3,
-      activeAlerts: 8,
-    },
-  ],
-};
+      reportGenerated: new Date().toISOString(),
+    };
+  }
+  return report;
+}
 
 /**
- * Mock data for system report
- */
-const mockSystemReport = {
-  meters: [
-    {
-      id: 'meter-001',
-      name: 'Main Building Meter',
-      location: 'Building A',
-      status: 'online',
-      lastReading: '2026-01-15T09:00:00Z',
-      totalReadings: 1523,
-    },
-    {
-      id: 'meter-002',
-      name: 'Auxiliary Meter',
-      location: 'Building B',
-      status: 'online',
-      lastReading: '2026-01-15T08:00:00Z',
-      totalReadings: 987,
-    },
-  ],
-  readings: mockMeterReadings,
-  alerts: [
-    {
-      id: 'alert-001',
-      type: 'anomaly',
-      severity: 'warning',
-      message: 'Unusual consumption pattern detected',
-      meterId: 'meter-001',
-      timestamp: '2026-01-15T10:30:00Z',
-      resolved: false,
-    },
-  ],
-  summary: {
-    totalMeters: 2,
-    onlineMeters: 2,
-    offlineMeters: 0,
-    totalReadings: 2510,
-    activeAlerts: 1,
-    reportGenerated: '2026-01-15T12:00:00Z',
-  },
-};
-
-/**
- * Available fields for each export type
+ * Available fields for each export type. These drive both the field
+ * whitelist (?fields=) and the CSV column set, so they must mirror the
+ * real export shapes above - a column that no row can fill is a lie in
+ * every file we hand to a customer.
  */
 const AVAILABLE_FIELDS = {
-  readings: ['id', 'meterId', 'timestamp', 'value', 'unit', 'status'],
-  analytics: ['date', 'weekStart', 'weekEnd', 'month', 'totalConsumption', 'averageConsumption', 'averageDailyConsumption', 'peakConsumption', 'peakDay', 'meterCount', 'activeAlerts'],
-  meters: ['id', 'name', 'location', 'status', 'lastReading', 'totalReadings'],
+  readings: ['id', 'meterId', 'timestamp', 'value', 'unit', 'createdAt'],
+  analytics: ['date', 'weekStart', 'weekEnd', 'month', 'totalConsumption', 'averageConsumption', 'averageDailyConsumption', 'peakConsumption', 'peakDay', 'meterCount'],
+  meters: ['id', 'deviceId', 'name', 'location', 'registeredAt'],
   alerts: ['id', 'type', 'severity', 'message', 'meterId', 'timestamp', 'resolved'],
-  summary: ['totalMeters', 'onlineMeters', 'offlineMeters', 'totalReadings', 'activeAlerts', 'reportGenerated'],
+  summary: ['totalMeters', 'totalReadings', 'activeAlerts', 'reportGenerated'],
 };
 
 /**
@@ -167,7 +217,7 @@ const AVAILABLE_FIELDS = {
  * /api/exports/readings:
  *   get:
  *     summary: Export meter readings
- *     description: Export meter readings with filtering options in CSV/JSON/NDJSON.
+ *     description: Export stored meter readings with filtering options in CSV/JSON/NDJSON.
  *     tags: [Exports]
  *     security: [{ bearerAuth: [] }]
  *     parameters:
@@ -194,34 +244,20 @@ router.get('/readings', authenticate, validate(exportReadingsQuerySchema), async
   try {
     log.info({ query: req.query }, 'Export readings request');
 
-    // Apply filters (mock implementation)
-    let filteredData = [...mockMeterReadings];
+    const meterIds = req.query.meterIds
+      ? req.query.meterIds.split(',').map((id) => id.trim())
+      : undefined;
 
-    // Filter by meter IDs
-    if (req.query.meterIds) {
-      const meterIds = req.query.meterIds.split(',').map(id => id.trim());
-      filteredData = filteredData.filter(reading => meterIds.includes(reading.meterId));
-    }
+    const rows = getExportReadings({
+      meterIds,
+      status: req.query.status,
+      startDate: req.query.startDate,
+      endDate: req.query.endDate,
+    });
 
-    // Filter by date range
-    if (req.query.startDate) {
-      const startDate = new Date(req.query.startDate);
-      filteredData = filteredData.filter(reading => new Date(reading.timestamp) >= startDate);
-    }
+    log.info({ recordCount: rows.length }, 'Exporting readings');
 
-    if (req.query.endDate) {
-      const endDate = new Date(req.query.endDate);
-      filteredData = filteredData.filter(reading => new Date(reading.timestamp) <= endDate);
-    }
-
-    // Filter by status
-    if (req.query.status) {
-      filteredData = filteredData.filter(reading => reading.status === req.query.status);
-    }
-
-    log.info({ recordCount: filteredData.length }, 'Exporting readings');
-
-    await handleExport(req, res, filteredData, AVAILABLE_FIELDS.readings, 'meter-readings');
+    await handleExport(req, res, rows, AVAILABLE_FIELDS.readings, 'meter-readings');
   } catch (error) {
     log.error({ error }, 'Export readings error');
     if (!res.headersSent) {
@@ -235,7 +271,7 @@ router.get('/readings', authenticate, validate(exportReadingsQuerySchema), async
  * /api/exports/analytics/{summaryType}:
  *   get:
  *     summary: Export analytics summary
- *     description: Export analytics summaries by type (daily, weekly, monthly).
+ *     description: Export consumption summaries computed from real stored readings (daily, weekly, monthly).
  *     tags: [Exports]
  *     security: [{ bearerAuth: [] }]
  *     parameters:
@@ -257,7 +293,9 @@ router.get('/analytics/:summaryType', authenticate, validate({ ...exportAnalytic
 
     log.info({ summaryType, query: req.query }, 'Export analytics request');
 
-    // Validate summary type
+    // The params schema already constrains summaryType to daily/weekly/monthly,
+    // so this branch is unreachable through validation - kept as a guard
+    // because this handler computes per-type.
     const validTypes = ['daily', 'weekly', 'monthly'];
     if (!validTypes.includes(summaryType)) {
       return res.status(400).json({
@@ -266,17 +304,13 @@ router.get('/analytics/:summaryType', authenticate, validate({ ...exportAnalytic
       });
     }
 
-    const data = mockAnalyticsData[summaryType] || [];
-
-    // Apply date range filters if applicable
-    let filteredData = [...data];
-    if (req.query.startDate && summaryType === 'daily') {
-      const startDate = req.query.startDate;
-      filteredData = filteredData.filter(item => item.date >= startDate);
-    }
-    if (req.query.endDate && summaryType === 'daily') {
-      const endDate = req.query.endDate;
-      filteredData = filteredData.filter(item => item.date <= endDate);
+    let filteredData;
+    if (summaryType === 'daily') {
+      filteredData = computeDailySummaries(req.query.startDate, req.query.endDate);
+    } else if (summaryType === 'weekly') {
+      filteredData = computeWeeklySummaries();
+    } else {
+      filteredData = computeMonthlySummaries();
     }
 
     log.info({ summaryType, recordCount: filteredData.length }, 'Exporting analytics');
@@ -314,82 +348,32 @@ router.get('/system-report', authenticate, requireAdmin, validate(exportSystemRe
   try {
     log.info({ query: req.query }, 'Export system report request');
 
-    // Determine which sections to include
-    const sections = req.query.sections ? req.query.sections.split(',').map(s => s.trim()) : ['meters', 'readings', 'alerts', 'summary'];
+    const sections = req.query.sections
+      ? req.query.sections.split(',').map((s) => s.trim())
+      : ['meters', 'readings', 'alerts', 'summary'];
 
-    // Build report data based on requested sections
-    const reportData = {};
-    let allFields = [];
+    const reportData = buildSystemReport(sections);
 
-    if (sections.includes('meters')) {
-      reportData.meters = mockSystemReport.meters;
-      allFields = allFields.concat(AVAILABLE_FIELDS.meters);
-    }
-
-    if (sections.includes('readings')) {
-      reportData.readings = mockSystemReport.readings;
-      allFields = allFields.concat(AVAILABLE_FIELDS.readings);
-    }
-
-    if (sections.includes('alerts')) {
-      reportData.alerts = mockSystemReport.alerts;
-      allFields = allFields.concat(AVAILABLE_FIELDS.alerts);
-    }
-
-    if (sections.includes('summary')) {
-      reportData.summary = mockSystemReport.summary;
-      allFields = allFields.concat(AVAILABLE_FIELDS.summary);
-    }
-
-    // Flatten the report for CSV export
-    let exportData;
     if (req.query.format === 'csv') {
-      // For CSV, we need to flatten the structure
-      // This is a simplified approach - in production, you might want separate CSV files per section
-      exportData = [];
-      
-      if (reportData.meters) {
-        reportData.meters.forEach(item => {
-          exportData.push({ ...item, _section: 'meters' });
-        });
+      // CSV needs one flat row stream; tag each row with its section.
+      const exportData = [];
+      for (const section of ['meters', 'readings', 'alerts']) {
+        for (const row of reportData[section] || []) {
+          exportData.push({ ...row, _section: section });
+        }
       }
-      
-      if (reportData.readings) {
-        reportData.readings.forEach(item => {
-          exportData.push({ ...item, _section: 'readings' });
-        });
-      }
-      
-      if (reportData.alerts) {
-        reportData.alerts.forEach(item => {
-          exportData.push({ ...item, _section: 'alerts' });
-        });
-      }
-      
       if (reportData.summary) {
         exportData.push({ ...reportData.summary, _section: 'summary' });
       }
-      
-      allFields.push('_section');
-    } else {
-      // For JSON, keep the nested structure
-      exportData = reportData;
-      allFields = AVAILABLE_FIELDS.meters.concat(
-        AVAILABLE_FIELDS.readings,
-        AVAILABLE_FIELDS.alerts,
-        AVAILABLE_FIELDS.summary
-      );
-    }
 
-    log.info({ sections, recordCount: Array.isArray(exportData) ? exportData.length : 1 }, 'Exporting system report');
-
-    if (req.query.format === 'csv') {
-      await handleExport(req, res, exportData, allFields, 'system-report');
+      const allFields = sections.flatMap((s) => AVAILABLE_FIELDS[s] || []);
+      log.info({ sections, recordCount: exportData.length }, 'Exporting system report');
+      await handleExport(req, res, exportData, allFields.concat('_section'), 'system-report');
     } else {
-      // For JSON, send the nested structure directly
+      // JSON/NDJSON keep the nested structure.
       res.setHeader('Content-Type', 'application/json; charset=utf-8');
-      res.setHeader('Content-Disposition', `attachment; filename="system-report.json"`);
-      res.json(exportData);
+      res.setHeader('Content-Disposition', 'attachment; filename="system-report.json"');
+      res.json(reportData);
     }
   } catch (error) {
     log.error({ error }, 'Export system report error');
@@ -404,7 +388,7 @@ router.get('/system-report', authenticate, requireAdmin, validate(exportSystemRe
  * /api/exports/meters:
  *   get:
  *     summary: Export meter registry
- *     description: Export the meter registry with optional status and location filters.
+ *     description: Export the registered device registry with optional location filter.
  *     tags: [Exports]
  *     security: [{ bearerAuth: [] }]
  *     parameters:
@@ -425,22 +409,14 @@ router.get('/meters', authenticate, validate(exportMetersQuerySchema), async (re
   try {
     log.info({ query: req.query }, 'Export meters request');
 
-    const data = mockSystemReport.meters;
+    const rows = getExportMeters({
+      status: req.query.status,
+      location: req.query.location,
+    });
 
-    // Apply filters
-    let filteredData = [...data];
-    
-    if (req.query.status) {
-      filteredData = filteredData.filter(meter => meter.status === req.query.status);
-    }
+    log.info({ recordCount: rows.length }, 'Exporting meters');
 
-    if (req.query.location) {
-      filteredData = filteredData.filter(meter => meter.location === req.query.location);
-    }
-
-    log.info({ recordCount: filteredData.length }, 'Exporting meters');
-
-    await handleExport(req, res, filteredData, AVAILABLE_FIELDS.meters, 'meters');
+    await handleExport(req, res, rows, AVAILABLE_FIELDS.meters, 'meters');
   } catch (error) {
     log.error({ error }, 'Export meters error');
     if (!res.headersSent) {

@@ -270,9 +270,8 @@ curl -H "Authorization: Bearer YOUR_TOKEN" \
 curl -H "Authorization: Bearer YOUR_TOKEN" \
   "http://localhost:3000/api/exports/analytics/daily?format=ndjson"
 
-# Export system report (admin only)
-curl -H "Authorization: Bearer YOUR_TOKEN" \
-  -H "x-role: admin" \
+# Export system report (admin only - admin role comes from the JWT, never a header)
+curl -H "Authorization: Bearer ADMIN_TOKEN" \
   "http://localhost:3000/api/exports/system-report?format=json&sections=meters,summary"
 ```
 

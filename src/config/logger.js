@@ -30,7 +30,6 @@ const logger = pino({
       'req.headers.authorization',
       'req.headers.cookie',
       'req.headers["x-api-key"]',
-      'req.headers["x-role"]',
       'req.headers["x-correlation-id"]',
     ],
     remove: true,

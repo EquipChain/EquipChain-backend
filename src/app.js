@@ -106,7 +106,7 @@ app.use(
   cors({
     origin: config.corsOrigins,
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'x-correlation-id', 'x-api-key', 'x-role'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-correlation-id', 'x-api-key'],
     maxAge: 86400,
   })
 );

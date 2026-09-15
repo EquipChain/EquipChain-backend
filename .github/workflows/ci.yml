@@ -6,6 +6,14 @@ on:
   pull_request:
     branches: [main]
 
+# One run per ref: a fast follow-up push cancels the superseded run instead
+# of queueing behind it. Without this, three pushes in a minute means three
+# full test matrices running sequentially on shared runners - and the first
+# two results are for commits that are already stale.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
@@ -56,11 +64,14 @@ jobs:
         run: npm audit --omit=dev --audit-level=high
 
   docker:
-    # Build the production image on every PR to catch Dockerfile breakage
-    # before merge; the image is not pushed from CI.
+    # Build the production image on every PR AND on pushes to main. The
+    # original PR-only gate missed the case that actually bit this repo: a
+    # Dockerfile or entry-point regression can land on main (where the image
+    # is what gets deployed) with no PR in between - the boot-crash fix in
+    # this repo's history is exactly such a regression. The image is still
+    # not pushed from CI; this is a build gate, not a release pipeline.
     runs-on: ubuntu-latest
     needs: test
-    if: github.event_name == 'pull_request'
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - name: Build production image

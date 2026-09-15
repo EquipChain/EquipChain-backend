@@ -41,3 +41,25 @@ test('GET /docs serves the Swagger UI page', async () => {
   assert.strictEqual(res.status, 200);
   assert.match(res.headers['content-type'], /html/);
 });
+
+test('Swagger UI points at the live /api/openapi.json instead of a mount-time snapshot', async () => {
+  const app = express();
+  app.use('/api', docsRoutes);
+
+  const page = await request(app, 'GET', '/api/docs/');
+  assert.strictEqual(page.status, 200);
+
+  // swagger-ui-express renders the bootstrap options into the
+  // swagger-ui-init.js asset; the initializer copies customOptions (which
+  // carries our url) into the SwaggerUIBundle options before init.
+  const init = await request(app, 'GET', '/api/docs/swagger-ui-init.js');
+  assert.strictEqual(init.status, 200);
+
+  // setup() used to embed buildOpenApiSpec() output at mount time, so the
+  // UI silently missed every endpoint registered after the docs router -
+  // while /api/openapi.json served them fine. Asserting the initializer
+  // references the live endpoint (and does NOT embed a spec snapshot)
+  // pins the no-drift contract.
+  assert.match(init.body, /api\/openapi\.json/);
+  assert.doesNotMatch(init.body, /securitySchemes/);
+});

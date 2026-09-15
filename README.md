@@ -469,6 +469,19 @@ Default `CONTRACT_ID`: `CB7PSJZALNWNX7NLOAM6LOEL4OJZMFPQZJMIYO522ZSACYWXTZIDEDSS
 
 ## Development Guide
 
+### Server Entry Points
+
+The project has two entry files with distinct roles - keep them that way:
+
+| File | Role | Used by |
+|------|------|---------|
+| `index.js` | Full boot path: seeds dev data, installs process handlers, starts the server with all background services | `npm start`, the Docker `CMD` |
+| `src/server.js` | Library module: exports `startServer`, `installProcessHandlers`, `gracefulShutdown`; also runs standalone when executed directly | `index.js`, tests, tooling |
+
+> **Historical note:** `src/server.js` exports the boot contract `index.js`
+> consumes. Requiring the module (as tests do) must never mutate global
+> process state - handlers are installed only via `installProcessHandlers()`.
+
 ### Running Tests
 
 ```bash

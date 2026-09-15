@@ -19,6 +19,12 @@ const log = childLogger('metrics');
 
 const HTTP_DURATION_BUCKETS_MS = [5, 10, 25, 50, 100, 250, 500, 1000, 2500, 5000, 10000];
 
+// Deployment identity for the build_info gauge. Unset env collapses to
+// 'unknown' rather than emitting an empty label - an empty git_sha label is
+// indistinguishable in dashboards from a scrape bug.
+const GIT_SHA = process.env.GIT_SHA || 'unknown';
+const DEPLOY_TIME = process.env.DEPLOY_TIME || 'unknown';
+
 /** Map<`${method}|${route}|${status}`, count> */
 const requestCounts = new Map();
 /** Map<`${method}|${route}`, { buckets: Map<bucketIndex, count>, sum, count }> */
@@ -189,13 +195,27 @@ function renderMetrics() {
   lines.push('# TYPE equipchain_eventloop_lag_ms gauge');
   lines.push(`equipchain_eventloop_lag_ms ${lastLagMs.toFixed(3)}`);
 
+  // Build info: the standard Prometheus pattern for deployment identity.
+  // /health reports it in JSON for humans, but dashboards and alert rules
+  // need it as a label they can group by - "is this instance running the
+  // build with the fix?" becomes a PromQL join instead of a guess. Labels
+  // are set from deploy-tooling env (GIT_SHA/DEPLOY_TIME) and stay constant
+  // for the process lifetime, so cardinality is fixed at 1 series.
+  lines.push('# HELP equipchain_build_info Build identity (git SHA, deploy time).');
+  lines.push('# TYPE equipchain_build_info gauge');
+  lines.push(`equipchain_build_info{git_sha="${escapeLabel(GIT_SHA)}",deploy_time="${escapeLabel(DEPLOY_TIME)}"} 1`);
+
   // Service gauges (queue depth, schedules, cache pressure, ...).
+  // HELP/TYPE are only emitted when at least one finite value renders: a
+  // gauge whose every value is NaN (e.g. a provider reading a dead
+  // subsystem) otherwise leaves orphan metadata lines that Prometheus
+  // accepts but that pollute the output and confuse parsers that expect
+  // samples after TYPE.
   for (const provider of gaugeProviders) {
     try {
       for (const gauge of provider()) {
         if (!gauge || !gauge.name || !Array.isArray(gauge.values)) continue;
-        lines.push(`# HELP ${gauge.name} ${escapeLabel(gauge.help || gauge.name)}`);
-        lines.push(`# TYPE ${gauge.name} gauge`);
+        const sampleLines = [];
         for (const series of gauge.values) {
           const labels = Object.entries(series.labels || {})
             .map(([k, v]) => `${k}="${escapeLabel(v)}"`)
@@ -203,8 +223,12 @@ function renderMetrics() {
           const labelPart = labels ? `{${labels}}` : '';
           const value = Number(series.value);
           if (!Number.isFinite(value)) continue;
-          lines.push(`${gauge.name}${labelPart} ${value}`);
+          sampleLines.push(`${gauge.name}${labelPart} ${value}`);
         }
+        if (sampleLines.length === 0) continue;
+        lines.push(`# HELP ${gauge.name} ${escapeLabel(gauge.help || gauge.name)}`);
+        lines.push(`# TYPE ${gauge.name} gauge`);
+        lines.push(...sampleLines);
       }
     } catch (err) {
       log.warn({ error: err.message }, 'gauge provider failed during scrape');
